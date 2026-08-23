@@ -17,6 +17,12 @@ It provides a modern chatbot interface for asking questions, solving problems, p
 
 ---
 
+## 🖥️ Preview
+
+![ARIOS Preview](https://files.catbox.moe/w5adwr.png)
+
+---
+
 ## 🌐 Live Demo
 
 ### 👉 [Try ARIOS](https://arios-ai.vercel.app/)
