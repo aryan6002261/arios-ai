@@ -1,10 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
+
+const API_URL = "https://arios-backend.onrender.com";
 
 function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [taskStatus, setTaskStatus] = useState(null);
 
   const sendMessage = async () => {
     const text = input.trim();
@@ -19,9 +22,10 @@ function App() {
     setMessages((current) => [...current, userMessage]);
     setInput("");
     setLoading(true);
+    setTaskStatus("queued");
 
     try {
-      const response = await fetch("https://arios-backend.onrender.com/chat", {
+      const response = await fetch(`${API_URL}/tasks`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -35,14 +39,9 @@ function App() {
         throw new Error("Server error");
       }
 
-      const data = await response.json();
+      const task = await response.json();
 
-      const assistantMessage = {
-        role: "assistant",
-        content: data.response,
-      };
-
-      setMessages((current) => [...current, assistantMessage]);
+      await monitorTask(task.task_id);
     } catch (error) {
       console.error(error);
 
@@ -54,9 +53,73 @@ function App() {
             "Sorry, I couldn't connect to the ARIOS server.",
         },
       ]);
-    } finally {
+
+      setTaskStatus("failed");
       setLoading(false);
     }
+  };
+
+  const monitorTask = async (taskId) => {
+    const checkStatus = async () => {
+      try {
+        const response = await fetch(
+          `${API_URL}/tasks/${taskId}`
+        );
+
+        if (!response.ok) {
+          throw new Error("Could not check task status");
+        }
+
+        const task = await response.json();
+
+        setTaskStatus(task.status);
+
+        if (task.status === "completed") {
+          setMessages((current) => [
+            ...current,
+            {
+              role: "assistant",
+              content: task.result || "Task completed.",
+            },
+          ]);
+
+          setLoading(false);
+          return;
+        }
+
+        if (task.status === "failed") {
+          setMessages((current) => [
+            ...current,
+            {
+              role: "assistant",
+              content:
+                "ARIOS couldn't complete this task. Please try again.",
+            },
+          ]);
+
+          setLoading(false);
+          return;
+        }
+
+        setTimeout(checkStatus, 1500);
+      } catch (error) {
+        console.error(error);
+
+        setTaskStatus("failed");
+        setLoading(false);
+
+        setMessages((current) => [
+          ...current,
+          {
+            role: "assistant",
+            content:
+              "Sorry, I couldn't check the ARIOS task status.",
+          },
+        ]);
+      }
+    };
+
+    checkStatus();
   };
 
   const handleKeyDown = (event) => {
@@ -69,6 +132,25 @@ function App() {
   const newChat = () => {
     setMessages([]);
     setInput("");
+    setTaskStatus(null);
+    setLoading(false);
+  };
+
+  const getStatusText = () => {
+    switch (taskStatus) {
+      case "queued":
+        return "ARIOS is preparing your task...";
+      case "planning":
+        return "🧠 ARIOS is planning...";
+      case "working":
+        return "⚙️ ARIOS is working...";
+      case "completed":
+        return "✓ Task completed";
+      case "failed":
+        return "Task failed";
+      default:
+        return "";
+    }
   };
 
   return (
@@ -92,7 +174,7 @@ function App() {
 
           {messages.length > 0 && (
             <button className="chat-item">
-              Current conversation
+              Current task
             </button>
           )}
         </div>
@@ -104,7 +186,6 @@ function App() {
 
       </aside>
 
-
       {/* Main */}
       <main className="main">
 
@@ -115,6 +196,7 @@ function App() {
           </div>
 
           <div className="header-actions">
+
             <button onClick={newChat}>
               New Chat
             </button>
@@ -122,31 +204,30 @@ function App() {
             <button className="icon-button">
               ⋯
             </button>
+
           </div>
 
         </header>
 
-
         <section className="chat-container">
 
           {/* Welcome */}
-          {messages.length === 0 && (
+          {messages.length === 0 && !loading && (
             <div className="welcome">
 
               <div className="ai-icon">
                 ◈
               </div>
 
-              <h1>How can I help you?</h1>
+              <h1>What should I accomplish?</h1>
 
               <p>
-                I'm ARIOS, your intelligent AI assistant.
-                Ask me anything.
+                I'm ARIOS, your autonomous AI taskmaster.
+                Give me a goal and I'll work through it.
               </p>
 
             </div>
           )}
-
 
           {/* Messages */}
           {messages.length > 0 && (
@@ -171,6 +252,7 @@ function App() {
                 </div>
               ))}
 
+              {/* Task status */}
               {loading && (
                 <div className="message-row assistant">
 
@@ -179,7 +261,15 @@ function App() {
                   </div>
 
                   <div className="message-content">
-                    ARIOS is thinking...
+
+                    <div className="task-status">
+                      {getStatusText()}
+                    </div>
+
+                    <div className="task-progress">
+                      <div className="task-progress-bar" />
+                    </div>
+
                   </div>
 
                 </div>
@@ -188,7 +278,6 @@ function App() {
             </div>
           )}
 
-
           {/* Input */}
           <div className="input-area">
 
@@ -196,9 +285,11 @@ function App() {
 
               <textarea
                 value={input}
-                onChange={(event) => setInput(event.target.value)}
+                onChange={(event) =>
+                  setInput(event.target.value)
+                }
                 onKeyDown={handleKeyDown}
-                placeholder="Message ARIOS..."
+                placeholder="Give ARIOS a task..."
                 rows="1"
                 disabled={loading}
               />
