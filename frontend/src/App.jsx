@@ -1,19 +1,6 @@
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import {
-  collection,
-  deleteDoc,
-  doc,
-  getDocs,
-  orderBy,
-  query,
-  serverTimestamp,
-  setDoc,
-} from "firebase/firestore";
-import { signInAnonymously } from "firebase/auth";
-
-import { db, auth } from "./firebase";
 import "./App.css";
 
 const API_URL = "https://arios-backend.onrender.com";
@@ -23,75 +10,47 @@ function App() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const [taskProgress, setTaskProgress] = useState(0);
+  const [taskStatus, setTaskStatus] = useState("Preparing task...");
+
   const [chatHistory, setChatHistory] = useState([]);
   const [activePanel, setActivePanel] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const [firebaseReady, setFirebaseReady] = useState(false);
-
-  // --------------------------------------------------
-  // Firebase anonymous authentication
-  // --------------------------------------------------
+  /* --------------------------------------------------
+     Load chat history
+  -------------------------------------------------- */
 
   useEffect(() => {
-    const initializeFirebase = async () => {
+    const savedChats = localStorage.getItem("arios_chats");
+
+    if (savedChats) {
       try {
-        if (!auth.currentUser) {
-          await signInAnonymously(auth);
-        }
-
-        setFirebaseReady(true);
-      } catch (error) {
-        console.error("Firebase authentication failed:", error);
-        setFirebaseReady(false);
+        setChatHistory(JSON.parse(savedChats));
+      } catch {
+        setChatHistory([]);
       }
-    };
-
-    initializeFirebase();
+    }
   }, []);
 
-  // --------------------------------------------------
-  // Load recent chats from Firestore
-  // --------------------------------------------------
+  /* --------------------------------------------------
+     Save chat history
+  -------------------------------------------------- */
 
   useEffect(() => {
-    if (!firebaseReady || !auth.currentUser) return;
+    if (chatHistory.length > 0) {
+      localStorage.setItem(
+        "arios_chats",
+        JSON.stringify(chatHistory)
+      );
+    }
+  }, [chatHistory]);
 
-    const loadChats = async () => {
-      try {
-        const chatsRef = collection(
-          db,
-          "users",
-          auth.currentUser.uid,
-          "chats"
-        );
+  /* --------------------------------------------------
+     Save current conversation
+  -------------------------------------------------- */
 
-        const chatsQuery = query(
-          chatsRef,
-          orderBy("createdAt", "desc")
-        );
-
-        const snapshot = await getDocs(chatsQuery);
-
-        const chats = snapshot.docs.map((item) => ({
-          id: item.id,
-          ...item.data(),
-        }));
-
-        setChatHistory(chats.slice(0, 10));
-      } catch (error) {
-        console.error("Could not load Firestore chats:", error);
-      }
-    };
-
-    loadChats();
-  }, [firebaseReady]);
-
-  // --------------------------------------------------
-  // Save chat to Firestore
-  // --------------------------------------------------
-
-  const saveCurrentChat = async (currentMessages) => {
+  const saveCurrentChat = (currentMessages) => {
     if (!currentMessages.length) return;
 
     const firstUserMessage = currentMessages.find(
@@ -102,75 +61,56 @@ function App() {
       ? firstUserMessage.content.slice(0, 35)
       : "New conversation";
 
-    const chatId = `${Date.now()}`;
-
     const chat = {
+      id: Date.now(),
       title,
       messages: currentMessages,
-      createdAt: serverTimestamp(),
     };
 
-    // Update UI immediately
-    setChatHistory((current) => [
-      {
-        id: chatId,
-        title,
-        messages: currentMessages,
-      },
-      ...current,
-    ].slice(0, 10));
+    setChatHistory((current) => {
+      const updated = [
+        chat,
+        ...current.filter((item) => item.title !== title),
+      ];
 
-    // Save to Firestore
-    if (firebaseReady && auth.currentUser) {
-      try {
-        await setDoc(
-          doc(
-            db,
-            "users",
-            auth.currentUser.uid,
-            "chats",
-            chatId
-          ),
-          chat
-        );
-      } catch (error) {
-        console.error("Could not save chat:", error);
-      }
-    }
+      return updated.slice(0, 10);
+    });
   };
 
-  // --------------------------------------------------
-  // New chat
-  // --------------------------------------------------
+  /* --------------------------------------------------
+     New chat
+  -------------------------------------------------- */
 
-  const newChat = async () => {
+  const newChat = () => {
     if (messages.length > 0) {
-      await saveCurrentChat(messages);
+      saveCurrentChat(messages);
     }
 
     setMessages([]);
     setInput("");
     setLoading(false);
+    setTaskProgress(0);
+    setTaskStatus("Preparing task...");
     setActivePanel(null);
     setMenuOpen(false);
   };
 
-  // --------------------------------------------------
-  // Load chat
-  // --------------------------------------------------
+  /* --------------------------------------------------
+     Load previous chat
+  -------------------------------------------------- */
 
   const loadChat = (chat) => {
     if (loading) return;
 
-    setMessages(chat.messages || []);
+    setMessages(chat.messages);
     setInput("");
     setActivePanel(null);
     setMenuOpen(false);
   };
 
-  // --------------------------------------------------
-  // Send message
-  // --------------------------------------------------
+  /* --------------------------------------------------
+     Send message
+  -------------------------------------------------- */
 
   const sendMessage = async () => {
     const text = input.trim();
@@ -188,7 +128,14 @@ function App() {
     setInput("");
     setLoading(true);
 
+    setTaskProgress(5);
+    setTaskStatus("Sending task to ARIOS...");
+
     try {
+      /* --------------------------------------------------
+         Create task
+      -------------------------------------------------- */
+
       const response = await fetch(`${API_URL}/tasks`, {
         method: "POST",
         headers: {
@@ -200,22 +147,23 @@ function App() {
       });
 
       if (!response.ok) {
-        throw new Error(
-          `Backend returned HTTP ${response.status}`
-        );
+        throw new Error("Failed to create task");
       }
 
       const task = await response.json();
 
-      if (!task.task_id) {
-        throw new Error("ARIOS did not return a task ID.");
-      }
+      setTaskProgress(10);
+      setTaskStatus("Task received");
 
       let completed = false;
 
+      /* --------------------------------------------------
+         Poll task status
+      -------------------------------------------------- */
+
       while (!completed) {
         await new Promise((resolve) =>
-          setTimeout(resolve, 1500)
+          setTimeout(resolve, 1200)
         );
 
         const statusResponse = await fetch(
@@ -223,26 +171,36 @@ function App() {
         );
 
         if (!statusResponse.ok) {
-          throw new Error(
-            `Could not check task status (${statusResponse.status}).`
-          );
+          throw new Error("Failed to check task status");
         }
 
         const status = await statusResponse.json();
 
-        if (status.status === "completed") {
-          const assistantMessage = {
-            role: "assistant",
-            content:
-              status.result || "Task completed successfully.",
-          };
+        const progress =
+          typeof status.progress === "number"
+            ? status.progress
+            : 0;
 
-          const finalMessages = [
-            ...updatedMessages,
-            assistantMessage,
-          ];
+        setTaskProgress(progress);
 
-          setMessages(finalMessages);
+        if (status.status === "queued") {
+          setTaskStatus("Task queued");
+        } else if (status.status === "planning") {
+          setTaskStatus("Planning your task");
+        } else if (status.status === "working") {
+          setTaskStatus("ARIOS is working");
+        } else if (status.status === "completed") {
+          setTaskProgress(100);
+          setTaskStatus("Task completed");
+
+          setMessages((current) => [
+            ...current,
+            {
+              role: "assistant",
+              content:
+                status.result || "Task completed.",
+            },
+          ]);
 
           completed = true;
         }
@@ -255,17 +213,17 @@ function App() {
         }
       }
     } catch (error) {
-      console.error("ARIOS error:", error);
+      console.error(error);
+
+      setTaskProgress(0);
+      setTaskStatus("Something went wrong");
 
       setMessages((current) => [
         ...current,
         {
           role: "assistant",
-          content: `**Sorry, I couldn't complete this task.**
-
-\`${error.message || "Unknown error"}\`
-
-Please try again.`,
+          content:
+            "Sorry, I couldn't complete this task. Please try again.",
         },
       ]);
     } finally {
@@ -273,9 +231,9 @@ Please try again.`,
     }
   };
 
-  // --------------------------------------------------
-  // Keyboard handling
-  // --------------------------------------------------
+  /* --------------------------------------------------
+     Keyboard handling
+  -------------------------------------------------- */
 
   const handleKeyDown = (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -284,9 +242,9 @@ Please try again.`,
     }
   };
 
-  // --------------------------------------------------
-  // Suggestions
-  // --------------------------------------------------
+  /* --------------------------------------------------
+     Suggestions
+  -------------------------------------------------- */
 
   const useSuggestion = (text) => {
     setInput(text);
@@ -297,66 +255,59 @@ Please try again.`,
     }, 50);
   };
 
-  // --------------------------------------------------
-  // Clear history
-  // --------------------------------------------------
+  /* --------------------------------------------------
+     Clear history
+  -------------------------------------------------- */
 
-  const clearHistory = async () => {
+  const clearHistory = () => {
     setChatHistory([]);
-    setMenuOpen(false);
-
-    if (!firebaseReady || !auth.currentUser) return;
-
-    try {
-      const chatsRef = collection(
-        db,
-        "users",
-        auth.currentUser.uid,
-        "chats"
-      );
-
-      const snapshot = await getDocs(chatsRef);
-
-      await Promise.all(
-        snapshot.docs.map((item) =>
-          deleteDoc(item.ref)
-        )
-      );
-    } catch (error) {
-      console.error(
-        "Could not clear Firestore history:",
-        error
-      );
-    }
+    localStorage.removeItem("arios_chats");
   };
 
   return (
     <div className="app">
 
-      {/* Sidebar */}
+      {/* ==================================================
+          SIDEBAR
+      ================================================== */}
 
       <aside className="sidebar">
 
         <div className="sidebar-top">
 
-          <div className="logo">
-            <div className="logo-mark">◈</div>
+          {/* Logo */}
 
-            <div>
-              <div className="logo-text">ARIOS</div>
+          <div className="logo">
+
+            <div className="logo-mark">
+              ◈
+            </div>
+
+            <div className="logo-copy">
+              <div className="logo-text">
+                ARIOS
+              </div>
 
               <div className="logo-subtitle">
                 AI TASKMASTER
               </div>
             </div>
+
           </div>
+
+          {/* New Chat */}
 
           <button
             className="new-chat"
             onClick={newChat}
           >
-            <span className="new-chat-icon">＋</span>
-            <span>New Chat</span>
+            <span className="new-chat-icon">
+              ＋
+            </span>
+
+            <span>
+              New Chat
+            </span>
           </button>
 
           {/* Recent Chats */}
@@ -373,7 +324,6 @@ Please try again.`,
                 <button
                   className="clear-history"
                   onClick={clearHistory}
-                  title="Clear history"
                 >
                   Clear
                 </button>
@@ -384,8 +334,19 @@ Please try again.`,
             {chatHistory.length === 0 ? (
 
               <div className="empty-history">
-                <span>◌</span>
-                <p>No recent chats</p>
+
+                <span className="empty-history-icon">
+                  ◌
+                </span>
+
+                <p>
+                  No recent chats
+                </p>
+
+                <span>
+                  Start a conversation
+                </span>
+
               </div>
 
             ) : (
@@ -399,6 +360,7 @@ Please try again.`,
                     key={chat.id}
                     onClick={() => loadChat(chat)}
                   >
+
                     <span className="chat-item-icon">
                       ◈
                     </span>
@@ -406,14 +368,17 @@ Please try again.`,
                     <span className="chat-item-title">
                       {chat.title}
                     </span>
+
                   </button>
 
                 ))}
 
               </div>
+
             )}
 
           </div>
+
         </div>
 
         {/* Sidebar Bottom */}
@@ -426,7 +391,10 @@ Please try again.`,
               setMenuOpen(false);
             }}
           >
-            <span>⚙</span>
+            <span>
+              ⚙
+            </span>
+
             Settings
           </button>
 
@@ -436,7 +404,10 @@ Please try again.`,
               setMenuOpen(false);
             }}
           >
-            <span>ⓘ</span>
+            <span>
+              ⓘ
+            </span>
+
             About ARIOS
           </button>
 
@@ -444,7 +415,10 @@ Please try again.`,
 
       </aside>
 
-      {/* Main */}
+
+      {/* ==================================================
+          MAIN
+      ================================================== */}
 
       <main className="main">
 
@@ -453,13 +427,25 @@ Please try again.`,
         <header className="header">
 
           <div className="mobile-logo">
-            <span>◈</span>
-            <strong>ARIOS</strong>
+
+            <span>
+              ◈
+            </span>
+
+            <strong>
+              ARIOS
+            </strong>
+
           </div>
 
           <div className="header-status">
+
             <span className="status-dot"></span>
-            Online
+
+            <span>
+              Online
+            </span>
+
           </div>
 
           <div className="header-actions">
@@ -468,7 +454,10 @@ Please try again.`,
               className="header-new-chat"
               onClick={newChat}
             >
-              <span>＋</span>
+              <span>
+                ＋
+              </span>
+
               New Chat
             </button>
 
@@ -512,37 +501,60 @@ Please try again.`,
                   </button>
 
                 </div>
+
               )}
 
             </div>
+
           </div>
 
         </header>
 
-        {/* Chat */}
+
+        {/* ==================================================
+            CHAT AREA
+        ================================================== */}
 
         <section className="chat-container">
+
+          {/* --------------------------------------------------
+              WELCOME SCREEN
+          -------------------------------------------------- */}
 
           {messages.length === 0 && (
 
             <div className="welcome">
 
               <div className="ai-icon">
-                <span>◈</span>
+
+                <div className="ai-icon-glow"></div>
+
+                <span>
+                  ◈
+                </span>
+
               </div>
 
               <div className="welcome-badge">
+
                 <span className="status-dot"></span>
+
                 ARIOS is ready
+
               </div>
 
-              <h1>How can I help you?</h1>
+              <h1>
+                How can I help you?
+              </h1>
 
               <p className="welcome-description">
                 I'm ARIOS, your intelligent AI taskmaster.
                 <br />
                 Give me a task and I'll work on it for you.
               </p>
+
+
+              {/* Suggestions */}
 
               <div className="suggestions">
 
@@ -554,21 +566,29 @@ Please try again.`,
                     )
                   }
                 >
+
                   <div className="suggestion-icon">
                     ✦
                   </div>
 
                   <div className="suggestion-text">
-                    <strong>Explain something</strong>
+
+                    <strong>
+                      Explain something
+                    </strong>
+
                     <span>
                       Break down a concept clearly
                     </span>
+
                   </div>
 
                   <span className="suggestion-arrow">
                     →
                   </span>
+
                 </button>
+
 
                 <button
                   className="suggestion-card"
@@ -578,21 +598,29 @@ Please try again.`,
                     )
                   }
                 >
+
                   <div className="suggestion-icon">
                     ◫
                   </div>
 
                   <div className="suggestion-text">
-                    <strong>Create a plan</strong>
+
+                    <strong>
+                      Create a plan
+                    </strong>
+
                     <span>
                       Build a structured plan for me
                     </span>
+
                   </div>
 
                   <span className="suggestion-arrow">
                     →
                   </span>
+
                 </button>
+
 
                 <button
                   className="suggestion-card"
@@ -602,28 +630,39 @@ Please try again.`,
                     )
                   }
                 >
+
                   <div className="suggestion-icon">
                     ⌘
                   </div>
 
                   <div className="suggestion-text">
-                    <strong>Calculate something</strong>
+
+                    <strong>
+                      Calculate something
+                    </strong>
+
                     <span>
                       Get accurate results quickly
                     </span>
+
                   </div>
 
                   <span className="suggestion-arrow">
                     →
                   </span>
+
                 </button>
 
               </div>
 
             </div>
+
           )}
 
-          {/* Messages */}
+
+          {/* --------------------------------------------------
+              MESSAGES
+          -------------------------------------------------- */}
 
           {messages.length > 0 && (
 
@@ -639,9 +678,13 @@ Please try again.`,
                   <div className="message-avatar">
 
                     {message.role === "assistant" ? (
-                      <span>◈</span>
+                      <span>
+                        ◈
+                      </span>
                     ) : (
-                      <span>You</span>
+                      <span>
+                        You
+                      </span>
                     )}
 
                   </div>
@@ -668,33 +711,168 @@ Please try again.`,
 
               ))}
 
+
+              {/* --------------------------------------------------
+                  AGENT WORKING CARD
+              -------------------------------------------------- */}
+
               {loading && (
 
                 <div className="message-row assistant">
 
                   <div className="message-avatar">
-                    <span>◈</span>
+
+                    <span>
+                      ◈
+                    </span>
+
                   </div>
 
-                  <div className="message-content thinking">
 
-                    <span></span>
-                    <span></span>
-                    <span></span>
+                  <div className="agent-card">
 
-                    <em>
-                      ARIOS is working...
-                    </em>
+                    {/* Top */}
+
+                    <div className="agent-card-header">
+
+                      <div className="agent-identity">
+
+                        <div className="agent-pulse">
+                          <span></span>
+                        </div>
+
+                        <div>
+
+                          <strong>
+                            ARIOS
+                          </strong>
+
+                          <span>
+                            AUTONOMOUS TASK
+                          </span>
+
+                        </div>
+
+                      </div>
+
+                      <div className="agent-percentage">
+                        {taskProgress}%
+                      </div>
+
+                    </div>
+
+
+                    {/* Progress */}
+
+                    <div className="agent-progress-track">
+
+                      <div
+                        className="agent-progress-fill"
+                        style={{
+                          width: `${taskProgress}%`,
+                        }}
+                      >
+
+                        <div className="progress-shine"></div>
+
+                      </div>
+
+                    </div>
+
+
+                    {/* Steps */}
+
+                    <div className="agent-steps">
+
+                      <div
+                        className={
+                          taskProgress >= 10
+                            ? "agent-step active"
+                            : "agent-step"
+                        }
+                      >
+
+                        <span>
+                          {taskProgress >= 10
+                            ? "✓"
+                            : "○"}
+                        </span>
+
+                        Planning
+
+                      </div>
+
+
+                      <div
+                        className={
+                          taskProgress >= 30
+                            ? "agent-step active"
+                            : "agent-step"
+                        }
+                      >
+
+                        <span>
+                          {taskProgress >= 30
+                            ? "✓"
+                            : "○"}
+                        </span>
+
+                        Executing
+
+                      </div>
+
+
+                      <div
+                        className={
+                          taskProgress >= 100
+                            ? "agent-step active"
+                            : "agent-step"
+                        }
+                      >
+
+                        <span>
+                          {taskProgress >= 100
+                            ? "✓"
+                            : "○"}
+                        </span>
+
+                        Finishing
+
+                      </div>
+
+                    </div>
+
+
+                    {/* Status */}
+
+                    <div className="agent-status">
+
+                      <span className="agent-status-dot"></span>
+
+                      <span>
+                        {taskStatus}
+                      </span>
+
+                      <span className="agent-status-dots">
+                        •••
+                      </span>
+
+                    </div>
 
                   </div>
 
                 </div>
+
               )}
 
             </div>
+
           )}
 
-          {/* Input */}
+
+          {/* --------------------------------------------------
+              INPUT
+          -------------------------------------------------- */}
 
           <div className="input-area">
 
@@ -716,7 +894,8 @@ Please try again.`,
                 className="send-button"
                 onClick={sendMessage}
                 disabled={
-                  loading || !input.trim()
+                  loading ||
+                  !input.trim()
                 }
                 title="Send message"
               >
@@ -726,30 +905,43 @@ Please try again.`,
             </div>
 
             <p className="disclaimer">
-              ARIOS can make mistakes. Check important
-              information.
+              ARIOS can make mistakes. Check important information.
             </p>
 
           </div>
 
         </section>
 
-        {/* Settings */}
+
+        {/* ==================================================
+            SETTINGS
+        ================================================== */}
 
         {activePanel === "settings" && (
 
-          <div className="overlay">
+          <div
+            className="overlay"
+            onClick={(event) => {
+              if (event.target === event.currentTarget) {
+                setActivePanel(null);
+              }
+            }}
+          >
 
             <div className="panel">
 
               <div className="panel-header">
 
                 <div>
+
                   <span className="panel-label">
                     ARIOS
                   </span>
 
-                  <h2>Settings</h2>
+                  <h2>
+                    Settings
+                  </h2>
+
                 </div>
 
                 <button
@@ -763,15 +955,20 @@ Please try again.`,
 
               </div>
 
+
               <div className="setting-item">
 
                 <div>
-                  <strong>AI Taskmaster</strong>
+
+                  <strong>
+                    AI Taskmaster
+                  </strong>
 
                   <p>
                     ARIOS handles your requests through
                     its autonomous task system.
                   </p>
+
                 </div>
 
                 <span className="setting-status">
@@ -780,22 +977,28 @@ Please try again.`,
 
               </div>
 
+
               <div className="setting-item">
 
                 <div>
-                  <strong>Chat History</strong>
+
+                  <strong>
+                    Chat History
+                  </strong>
 
                   <p>
-                    Conversations are securely stored in
-                    Firestore.
+                    Conversations are saved locally in
+                    this browser.
                   </p>
+
                 </div>
 
                 <span className="setting-status">
-                  Cloud
+                  Local
                 </span>
 
               </div>
+
 
               <button
                 className="panel-danger"
@@ -807,24 +1010,39 @@ Please try again.`,
             </div>
 
           </div>
+
         )}
 
-        {/* About */}
+
+        {/* ==================================================
+            ABOUT
+        ================================================== */}
 
         {activePanel === "about" && (
 
-          <div className="overlay">
+          <div
+            className="overlay"
+            onClick={(event) => {
+              if (event.target === event.currentTarget) {
+                setActivePanel(null);
+              }
+            }}
+          >
 
             <div className="panel about-panel">
 
               <div className="panel-header">
 
                 <div>
+
                   <span className="panel-label">
                     ABOUT
                   </span>
 
-                  <h2>ARIOS</h2>
+                  <h2>
+                    ARIOS
+                  </h2>
+
                 </div>
 
                 <button
@@ -838,13 +1056,14 @@ Please try again.`,
 
               </div>
 
+
               <div className="about-logo">
                 ◈
               </div>
 
               <h3>
-                Autonomous Reasoning &amp; Intelligence
-                Operating System
+                Autonomous Reasoning &amp;
+                Intelligence Operating System
               </h3>
 
               <p>
@@ -854,16 +1073,31 @@ Please try again.`,
                 results.
               </p>
 
+
               <div className="about-tags">
-                <span>Google ADK</span>
-                <span>Gemini</span>
-                <span>FastAPI</span>
-                <span>Firestore</span>
+
+                <span>
+                  Google ADK
+                </span>
+
+                <span>
+                  Gemini
+                </span>
+
+                <span>
+                  FastAPI
+                </span>
+
+                <span>
+                  Firestore
+                </span>
+
               </div>
 
             </div>
 
           </div>
+
         )}
 
       </main>
