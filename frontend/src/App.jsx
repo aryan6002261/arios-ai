@@ -1,6 +1,19 @@
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+} from "firebase/firestore";
+import { signInAnonymously } from "firebase/auth";
+
+import { db, auth } from "./firebase";
 import "./App.css";
 
 const API_URL = "https://arios-backend.onrender.com";
@@ -14,30 +27,71 @@ function App() {
   const [activePanel, setActivePanel] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // Load saved chats
-  useEffect(() => {
-    const savedChats = localStorage.getItem("arios_chats");
+  const [firebaseReady, setFirebaseReady] = useState(false);
 
-    if (savedChats) {
+  // --------------------------------------------------
+  // Firebase anonymous authentication
+  // --------------------------------------------------
+
+  useEffect(() => {
+    const initializeFirebase = async () => {
       try {
-        setChatHistory(JSON.parse(savedChats));
-      } catch {
-        setChatHistory([]);
+        if (!auth.currentUser) {
+          await signInAnonymously(auth);
+        }
+
+        setFirebaseReady(true);
+      } catch (error) {
+        console.error("Firebase authentication failed:", error);
+        setFirebaseReady(false);
       }
-    }
+    };
+
+    initializeFirebase();
   }, []);
 
-  // Save chat history
-  useEffect(() => {
-    if (chatHistory.length > 0) {
-      localStorage.setItem(
-        "arios_chats",
-        JSON.stringify(chatHistory)
-      );
-    }
-  }, [chatHistory]);
+  // --------------------------------------------------
+  // Load recent chats from Firestore
+  // --------------------------------------------------
 
-  const saveCurrentChat = (currentMessages) => {
+  useEffect(() => {
+    if (!firebaseReady || !auth.currentUser) return;
+
+    const loadChats = async () => {
+      try {
+        const chatsRef = collection(
+          db,
+          "users",
+          auth.currentUser.uid,
+          "chats"
+        );
+
+        const chatsQuery = query(
+          chatsRef,
+          orderBy("createdAt", "desc")
+        );
+
+        const snapshot = await getDocs(chatsQuery);
+
+        const chats = snapshot.docs.map((item) => ({
+          id: item.id,
+          ...item.data(),
+        }));
+
+        setChatHistory(chats.slice(0, 10));
+      } catch (error) {
+        console.error("Could not load Firestore chats:", error);
+      }
+    };
+
+    loadChats();
+  }, [firebaseReady]);
+
+  // --------------------------------------------------
+  // Save chat to Firestore
+  // --------------------------------------------------
+
+  const saveCurrentChat = async (currentMessages) => {
     if (!currentMessages.length) return;
 
     const firstUserMessage = currentMessages.find(
@@ -48,25 +102,50 @@ function App() {
       ? firstUserMessage.content.slice(0, 35)
       : "New conversation";
 
+    const chatId = `${Date.now()}`;
+
     const chat = {
-      id: Date.now(),
       title,
       messages: currentMessages,
+      createdAt: serverTimestamp(),
     };
 
-    setChatHistory((current) => {
-      const updated = [
-        chat,
-        ...current.filter((item) => item.title !== title),
-      ];
+    // Update UI immediately
+    setChatHistory((current) => [
+      {
+        id: chatId,
+        title,
+        messages: currentMessages,
+      },
+      ...current,
+    ].slice(0, 10));
 
-      return updated.slice(0, 10);
-    });
+    // Save to Firestore
+    if (firebaseReady && auth.currentUser) {
+      try {
+        await setDoc(
+          doc(
+            db,
+            "users",
+            auth.currentUser.uid,
+            "chats",
+            chatId
+          ),
+          chat
+        );
+      } catch (error) {
+        console.error("Could not save chat:", error);
+      }
+    }
   };
 
-  const newChat = () => {
+  // --------------------------------------------------
+  // New chat
+  // --------------------------------------------------
+
+  const newChat = async () => {
     if (messages.length > 0) {
-      saveCurrentChat(messages);
+      await saveCurrentChat(messages);
     }
 
     setMessages([]);
@@ -76,14 +155,22 @@ function App() {
     setMenuOpen(false);
   };
 
+  // --------------------------------------------------
+  // Load chat
+  // --------------------------------------------------
+
   const loadChat = (chat) => {
     if (loading) return;
 
-    setMessages(chat.messages);
+    setMessages(chat.messages || []);
     setInput("");
     setActivePanel(null);
     setMenuOpen(false);
   };
+
+  // --------------------------------------------------
+  // Send message
+  // --------------------------------------------------
 
   const sendMessage = async () => {
     const text = input.trim();
@@ -113,10 +200,16 @@ function App() {
       });
 
       if (!response.ok) {
-        throw new Error("Failed to create task");
+        throw new Error(
+          `Backend returned HTTP ${response.status}`
+        );
       }
 
       const task = await response.json();
+
+      if (!task.task_id) {
+        throw new Error("ARIOS did not return a task ID.");
+      }
 
       let completed = false;
 
@@ -130,38 +223,49 @@ function App() {
         );
 
         if (!statusResponse.ok) {
-          throw new Error("Failed to check task status");
+          throw new Error(
+            `Could not check task status (${statusResponse.status}).`
+          );
         }
 
         const status = await statusResponse.json();
 
         if (status.status === "completed") {
-          setMessages((current) => [
-            ...current,
-            {
-              role: "assistant",
-              content: status.result || "Task completed.",
-            },
-          ]);
+          const assistantMessage = {
+            role: "assistant",
+            content:
+              status.result || "Task completed successfully.",
+          };
+
+          const finalMessages = [
+            ...updatedMessages,
+            assistantMessage,
+          ];
+
+          setMessages(finalMessages);
 
           completed = true;
         }
 
         if (status.status === "failed") {
           throw new Error(
-            status.error || "ARIOS could not complete the task."
+            status.error ||
+              "ARIOS could not complete the task."
           );
         }
       }
     } catch (error) {
-      console.error(error);
+      console.error("ARIOS error:", error);
 
       setMessages((current) => [
         ...current,
         {
           role: "assistant",
-          content:
-            "Sorry, I couldn't complete this task. Please try again.",
+          content: `**Sorry, I couldn't complete this task.**
+
+\`${error.message || "Unknown error"}\`
+
+Please try again.`,
         },
       ]);
     } finally {
@@ -169,12 +273,20 @@ function App() {
     }
   };
 
+  // --------------------------------------------------
+  // Keyboard handling
+  // --------------------------------------------------
+
   const handleKeyDown = (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       sendMessage();
     }
   };
+
+  // --------------------------------------------------
+  // Suggestions
+  // --------------------------------------------------
 
   const useSuggestion = (text) => {
     setInput(text);
@@ -185,37 +297,77 @@ function App() {
     }, 50);
   };
 
-  const clearHistory = () => {
+  // --------------------------------------------------
+  // Clear history
+  // --------------------------------------------------
+
+  const clearHistory = async () => {
     setChatHistory([]);
-    localStorage.removeItem("arios_chats");
+    setMenuOpen(false);
+
+    if (!firebaseReady || !auth.currentUser) return;
+
+    try {
+      const chatsRef = collection(
+        db,
+        "users",
+        auth.currentUser.uid,
+        "chats"
+      );
+
+      const snapshot = await getDocs(chatsRef);
+
+      await Promise.all(
+        snapshot.docs.map((item) =>
+          deleteDoc(item.ref)
+        )
+      );
+    } catch (error) {
+      console.error(
+        "Could not clear Firestore history:",
+        error
+      );
+    }
   };
 
   return (
     <div className="app">
+
       {/* Sidebar */}
+
       <aside className="sidebar">
+
         <div className="sidebar-top">
-          {/* Logo */}
+
           <div className="logo">
             <div className="logo-mark">◈</div>
+
             <div>
               <div className="logo-text">ARIOS</div>
+
               <div className="logo-subtitle">
                 AI TASKMASTER
               </div>
             </div>
           </div>
 
-          {/* New Chat */}
-          <button className="new-chat" onClick={newChat}>
+          <button
+            className="new-chat"
+            onClick={newChat}
+          >
             <span className="new-chat-icon">＋</span>
             <span>New Chat</span>
           </button>
 
           {/* Recent Chats */}
+
           <div className="chat-history">
+
             <div className="history-header">
-              <p className="history-title">RECENT CHATS</p>
+
+              <p className="history-title">
+                RECENT CHATS
+              </p>
 
               {chatHistory.length > 0 && (
                 <button
@@ -226,34 +378,48 @@ function App() {
                   Clear
                 </button>
               )}
+
             </div>
 
             {chatHistory.length === 0 ? (
+
               <div className="empty-history">
                 <span>◌</span>
                 <p>No recent chats</p>
               </div>
+
             ) : (
+
               <div className="history-list">
+
                 {chatHistory.map((chat) => (
+
                   <button
                     className="chat-item"
                     key={chat.id}
                     onClick={() => loadChat(chat)}
                   >
-                    <span className="chat-item-icon">◈</span>
+                    <span className="chat-item-icon">
+                      ◈
+                    </span>
+
                     <span className="chat-item-title">
                       {chat.title}
                     </span>
                   </button>
+
                 ))}
+
               </div>
             )}
+
           </div>
         </div>
 
         {/* Sidebar Bottom */}
+
         <div className="sidebar-bottom">
+
           <button
             onClick={() => {
               setActivePanel("settings");
@@ -273,13 +439,19 @@ function App() {
             <span>ⓘ</span>
             About ARIOS
           </button>
+
         </div>
+
       </aside>
 
       {/* Main */}
+
       <main className="main">
+
         {/* Header */}
+
         <header className="header">
+
           <div className="mobile-logo">
             <span>◈</span>
             <strong>ARIOS</strong>
@@ -291,6 +463,7 @@ function App() {
           </div>
 
           <div className="header-actions">
+
             <button
               className="header-new-chat"
               onClick={newChat}
@@ -300,15 +473,20 @@ function App() {
             </button>
 
             <div className="menu-container">
+
               <button
                 className="icon-button"
-                onClick={() => setMenuOpen(!menuOpen)}
+                onClick={() =>
+                  setMenuOpen(!menuOpen)
+                }
               >
                 ⋯
               </button>
 
               {menuOpen && (
+
                 <div className="dropdown-menu">
+
                   <button
                     onClick={() => {
                       setActivePanel("settings");
@@ -332,17 +510,23 @@ function App() {
                   <button onClick={newChat}>
                     ＋ New Chat
                   </button>
+
                 </div>
               )}
+
             </div>
           </div>
+
         </header>
 
         {/* Chat */}
+
         <section className="chat-container">
-          {/* Welcome */}
+
           {messages.length === 0 && (
+
             <div className="welcome">
+
               <div className="ai-icon">
                 <span>◈</span>
               </div>
@@ -360,8 +544,8 @@ function App() {
                 Give me a task and I'll work on it for you.
               </p>
 
-              {/* Suggestions */}
               <div className="suggestions">
+
                 <button
                   className="suggestion-card"
                   onClick={() =>
@@ -370,7 +554,9 @@ function App() {
                     )
                   }
                 >
-                  <div className="suggestion-icon">✦</div>
+                  <div className="suggestion-icon">
+                    ✦
+                  </div>
 
                   <div className="suggestion-text">
                     <strong>Explain something</strong>
@@ -379,7 +565,9 @@ function App() {
                     </span>
                   </div>
 
-                  <span className="suggestion-arrow">→</span>
+                  <span className="suggestion-arrow">
+                    →
+                  </span>
                 </button>
 
                 <button
@@ -390,7 +578,9 @@ function App() {
                     )
                   }
                 >
-                  <div className="suggestion-icon">◫</div>
+                  <div className="suggestion-icon">
+                    ◫
+                  </div>
 
                   <div className="suggestion-text">
                     <strong>Create a plan</strong>
@@ -399,7 +589,9 @@ function App() {
                     </span>
                   </div>
 
-                  <span className="suggestion-arrow">→</span>
+                  <span className="suggestion-arrow">
+                    →
+                  </span>
                 </button>
 
                 <button
@@ -410,7 +602,9 @@ function App() {
                     )
                   }
                 >
-                  <div className="suggestion-icon">⌘</div>
+                  <div className="suggestion-icon">
+                    ⌘
+                  </div>
 
                   <div className="suggestion-text">
                     <strong>Calculate something</strong>
@@ -419,62 +613,93 @@ function App() {
                     </span>
                   </div>
 
-                  <span className="suggestion-arrow">→</span>
+                  <span className="suggestion-arrow">
+                    →
+                  </span>
                 </button>
+
               </div>
+
             </div>
           )}
 
           {/* Messages */}
+
           {messages.length > 0 && (
+
             <div className="messages">
+
               {messages.map((message, index) => (
+
                 <div
                   className={`message-row ${message.role}`}
                   key={index}
                 >
+
                   <div className="message-avatar">
+
                     {message.role === "assistant" ? (
                       <span>◈</span>
                     ) : (
                       <span>You</span>
                     )}
+
                   </div>
 
                   <div className="message-content">
+
                     {message.role === "assistant" ? (
+
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
                       >
                         {message.content}
                       </ReactMarkdown>
+
                     ) : (
+
                       message.content
+
                     )}
+
                   </div>
+
                 </div>
+
               ))}
 
               {loading && (
+
                 <div className="message-row assistant">
+
                   <div className="message-avatar">
                     <span>◈</span>
                   </div>
 
                   <div className="message-content thinking">
+
                     <span></span>
                     <span></span>
                     <span></span>
-                    <em>ARIOS is working...</em>
+
+                    <em>
+                      ARIOS is working...
+                    </em>
+
                   </div>
+
                 </div>
               )}
+
             </div>
           )}
 
           {/* Input */}
+
           <div className="input-area">
+
             <div className="input-wrapper">
+
               <textarea
                 className="chat-input"
                 value={input}
@@ -490,63 +715,86 @@ function App() {
               <button
                 className="send-button"
                 onClick={sendMessage}
-                disabled={loading || !input.trim()}
+                disabled={
+                  loading || !input.trim()
+                }
                 title="Send message"
               >
                 ↑
               </button>
+
             </div>
 
             <p className="disclaimer">
-              ARIOS can make mistakes. Check important information.
+              ARIOS can make mistakes. Check important
+              information.
             </p>
+
           </div>
+
         </section>
 
-        {/* Settings Panel */}
+        {/* Settings */}
+
         {activePanel === "settings" && (
+
           <div className="overlay">
+
             <div className="panel">
+
               <div className="panel-header">
+
                 <div>
-                  <span className="panel-label">ARIOS</span>
+                  <span className="panel-label">
+                    ARIOS
+                  </span>
+
                   <h2>Settings</h2>
                 </div>
 
                 <button
                   className="close-button"
-                  onClick={() => setActivePanel(null)}
+                  onClick={() =>
+                    setActivePanel(null)
+                  }
                 >
                   ×
                 </button>
+
               </div>
 
               <div className="setting-item">
+
                 <div>
                   <strong>AI Taskmaster</strong>
+
                   <p>
-                    ARIOS handles your requests through its
-                    autonomous task system.
+                    ARIOS handles your requests through
+                    its autonomous task system.
                   </p>
                 </div>
 
                 <span className="setting-status">
                   Active
                 </span>
+
               </div>
 
               <div className="setting-item">
+
                 <div>
                   <strong>Chat History</strong>
+
                   <p>
-                    Conversations are saved locally in this
-                    browser.
+                    Conversations are securely stored in
+                    Firestore.
                   </p>
                 </div>
 
                 <span className="setting-status">
-                  Local
+                  Cloud
                 </span>
+
               </div>
 
               <button
@@ -555,31 +803,47 @@ function App() {
               >
                 Clear All Chat History
               </button>
+
             </div>
+
           </div>
         )}
 
-        {/* About Panel */}
+        {/* About */}
+
         {activePanel === "about" && (
+
           <div className="overlay">
+
             <div className="panel about-panel">
+
               <div className="panel-header">
+
                 <div>
-                  <span className="panel-label">ABOUT</span>
+                  <span className="panel-label">
+                    ABOUT
+                  </span>
+
                   <h2>ARIOS</h2>
                 </div>
 
                 <button
                   className="close-button"
-                  onClick={() => setActivePanel(null)}
+                  onClick={() =>
+                    setActivePanel(null)
+                  }
                 >
                   ×
                 </button>
+
               </div>
 
-              <div className="about-logo">◈</div>
+              <div className="about-logo">
+                ◈
+              </div>
 
-              <h3>Autonomous Reasoning &amp; Intelligence
+              <h3>
+                Autonomous Reasoning &amp; Intelligence
                 Operating System
               </h3>
 
@@ -594,11 +858,16 @@ function App() {
                 <span>Google ADK</span>
                 <span>Gemini</span>
                 <span>FastAPI</span>
+                <span>Firestore</span>
               </div>
+
             </div>
+
           </div>
         )}
+
       </main>
+
     </div>
   );
 }
