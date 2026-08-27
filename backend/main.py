@@ -13,6 +13,10 @@ from google.cloud import firestore
 from arios_agent.agent import root_agent
 
 
+# ============================================================
+# APP
+# ============================================================
+
 app = FastAPI(title="ARIOS API")
 
 
@@ -25,20 +29,45 @@ app.add_middleware(
 )
 
 
-# --------------------------------------------------
-# Google Firestore
-# --------------------------------------------------
+# ============================================================
+# FIRESTORE
+# ============================================================
+# Firestore is optional.
+#
+# Cloud Shell / Google Cloud:
+#   Firestore works automatically through ADC.
+#
+# Render:
+#   If Google credentials are unavailable, ARIOS continues
+#   using in-memory task storage instead of crashing.
+# ============================================================
 
-db = firestore.Client(
-    project="arios-ai",
-    database="arios-database"
-)
-tasks_collection = db.collection("tasks")
+db = None
+tasks_collection = None
+FIRESTORE_ENABLED = False
+
+try:
+    db = firestore.Client(
+        project="arios-ai",
+        database="arios-database",
+    )
+
+    tasks_collection = db.collection("tasks")
+    FIRESTORE_ENABLED = True
+
+    print("✓ Firestore connected")
+
+except Exception as error:
+    FIRESTORE_ENABLED = False
+
+    print("⚠ Firestore unavailable.")
+    print(f"⚠ Reason: {error}")
+    print("⚠ Continuing with in-memory task storage.")
 
 
-# --------------------------------------------------
-# Google ADK
-# --------------------------------------------------
+# ============================================================
+# GOOGLE ADK
+# ============================================================
 
 session_service = InMemorySessionService()
 
@@ -49,25 +78,39 @@ runner = Runner(
 )
 
 
-# --------------------------------------------------
-# Helper: update task
-# --------------------------------------------------
+# ============================================================
+# IN-MEMORY TASK STORAGE
+# ============================================================
+
+tasks = {}
+
+
+# ============================================================
+# HELPER: UPDATE TASK
+# ============================================================
 
 def update_task(task_id: str, updates: dict):
 
-    tasks_collection.document(task_id).set(
-        updates,
-        merge=True
-    )
+    # Always update local memory
+    if task_id in tasks:
+        tasks[task_id].update(updates)
 
-# --------------------------------------------------
+    # Update Firestore only when available
+    if FIRESTORE_ENABLED and tasks_collection is not None:
+
+        try:
+            tasks_collection.document(task_id).set(
+                updates,
+                merge=True,
+            )
+
+        except Exception as error:
+            print(f"⚠ Firestore update failed: {error}")
 
 
-
-
-# --------------------------------------------------
-# Helper: run ARIOS
-# --------------------------------------------------
+# ============================================================
+# HELPER: RUN ARIOS
+# ============================================================
 
 async def run_arios(user_message: str) -> str:
 
@@ -80,7 +123,7 @@ async def run_arios(user_message: str) -> str:
         role="user",
         parts=[
             types.Part(
-                text=user_message
+                text=user_message,
             )
         ],
     )
@@ -102,33 +145,52 @@ async def run_arios(user_message: str) -> str:
     return final_response
 
 
-# --------------------------------------------------
-# Background task worker
-# --------------------------------------------------
+# ============================================================
+# BACKGROUND TASK WORKER
+# ============================================================
 
-async def execute_task(task_id: str, user_message: str):
+async def execute_task(
+    task_id: str,
+    user_message: str,
+):
 
     try:
+
+        # ------------------------------
+        # Planning
+        # ------------------------------
 
         update_task(
             task_id,
             {
                 "status": "planning",
                 "progress": 10,
-            }
+            },
         )
 
         await asyncio.sleep(0.5)
+
+        # ------------------------------
+        # Working
+        # ------------------------------
 
         update_task(
             task_id,
             {
                 "status": "working",
                 "progress": 30,
-            }
+            },
         )
 
+        # ------------------------------
+        # Run ARIOS
+        # ------------------------------
+
         result = await run_arios(user_message)
+
+        # ------------------------------
+        # Completed
+        # ------------------------------
 
         update_task(
             task_id,
@@ -139,10 +201,12 @@ async def execute_task(task_id: str, user_message: str):
                 "completed_at": datetime.now(
                     timezone.utc
                 ).isoformat(),
-            }
+            },
         )
 
     except Exception as error:
+
+        print(f"❌ Task {task_id} failed: {error}")
 
         update_task(
             task_id,
@@ -150,13 +214,13 @@ async def execute_task(task_id: str, user_message: str):
                 "status": "failed",
                 "progress": 0,
                 "error": str(error),
-            }
+            },
         )
 
 
-# --------------------------------------------------
-# Health check
-# --------------------------------------------------
+# ============================================================
+# HEALTH CHECK
+# ============================================================
 
 @app.get("/")
 def root():
@@ -165,45 +229,57 @@ def root():
         "status": "online",
         "agent": "ARIOS",
         "mode": "autonomous-taskmaster",
-        "database": "firestore",
+        "database": (
+            "firestore"
+            if FIRESTORE_ENABLED
+            else "in-memory"
+        ),
     }
 
 
-# --------------------------------------------------
-# Chat endpoint
-# --------------------------------------------------
+# ============================================================
+# CHAT ENDPOINT
+# ============================================================
 
 @app.post("/chat")
 async def chat(message: dict):
 
-    user_message = message.get("message", "").strip()
+    user_message = message.get(
+        "message",
+        "",
+    ).strip()
 
     if not user_message:
 
         return {
-            "response": "Please enter a message."
+            "response": "Please enter a message.",
         }
 
-    final_response = await run_arios(user_message)
+    final_response = await run_arios(
+        user_message,
+    )
 
     return {
-        "response": final_response
+        "response": final_response,
     }
 
 
-# --------------------------------------------------
-# Create autonomous task
-# --------------------------------------------------
+# ============================================================
+# CREATE AUTONOMOUS TASK
+# ============================================================
 
 @app.post("/tasks")
 async def create_task(message: dict):
 
-    user_message = message.get("message", "").strip()
+    user_message = message.get(
+        "message",
+        "",
+    ).strip()
 
     if not user_message:
 
         return {
-            "error": "Please enter a task."
+            "error": "Please enter a task.",
         }
 
     task_id = str(uuid.uuid4())
@@ -213,57 +289,95 @@ async def create_task(message: dict):
     ).isoformat()
 
     task = {
-
         "task_id": task_id,
-
         "message": user_message,
-
         "status": "queued",
-
         "progress": 0,
-
         "result": None,
-
         "error": None,
-
         "created_at": created_at,
-
         "completed_at": None,
     }
 
-    # Store in Google Firestore
-    tasks_collection.document(task_id).set(task)
+    # Always store locally
+    tasks[task_id] = task
 
+    # Store in Firestore when available
+    if FIRESTORE_ENABLED and tasks_collection is not None:
+
+        try:
+
+            tasks_collection.document(
+                task_id
+            ).set(task)
+
+        except Exception as error:
+
+            print(
+                f"⚠ Firestore task creation failed: {error}"
+            )
+
+    # Start autonomous task
     asyncio.create_task(
         execute_task(
             task_id,
-            user_message
+            user_message,
         )
     )
 
     return {
-
         "task_id": task_id,
-
         "status": "queued",
-
-        "message": "ARIOS has started working on your task."
+        "message": (
+            "ARIOS has started working "
+            "on your task."
+        ),
     }
 
 
-# --------------------------------------------------
-# Get task status
-# --------------------------------------------------
+# ============================================================
+# GET TASK STATUS
+# ============================================================
 
 @app.get("/tasks/{task_id}")
 async def get_task(task_id: str):
 
-    # Get task from Firestore
-    document = tasks_collection.document(task_id).get()
+    # ------------------------------
+    # Local memory first
+    # ------------------------------
 
-    if document.exists:
-        return document.to_dict()
+    task = tasks.get(task_id)
+
+    if task:
+        return task
+
+    # ------------------------------
+    # Firestore fallback
+    # ------------------------------
+
+    if FIRESTORE_ENABLED and tasks_collection is not None:
+
+        try:
+
+            document = (
+                tasks_collection
+                .document(task_id)
+                .get()
+            )
+
+            if document.exists:
+                return document.to_dict()
+
+        except Exception as error:
+
+            print(
+                f"⚠ Firestore read failed: {error}"
+            )
+
+    # ------------------------------
+    # Not found
+    # ------------------------------
 
     return {
-        "error": "Task not found."
+        "error": "Task not found.",
     }
