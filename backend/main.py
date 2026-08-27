@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
+from google.cloud import firestore
 
 from arios_agent.agent import root_agent
 
@@ -24,6 +25,21 @@ app.add_middleware(
 )
 
 
+# --------------------------------------------------
+# Google Firestore
+# --------------------------------------------------
+
+db = firestore.Client(
+    project="arios-ai",
+    database="arios-database"
+)
+tasks_collection = db.collection("tasks")
+
+
+# --------------------------------------------------
+# Google ADK
+# --------------------------------------------------
+
 session_service = InMemorySessionService()
 
 runner = Runner(
@@ -34,10 +50,19 @@ runner = Runner(
 
 
 # --------------------------------------------------
-# In-memory task storage
+# Helper: update task
 # --------------------------------------------------
 
-tasks = {}
+def update_task(task_id: str, updates: dict):
+
+    tasks_collection.document(task_id).set(
+        updates,
+        merge=True
+    )
+
+# --------------------------------------------------
+
+
 
 
 # --------------------------------------------------
@@ -85,28 +110,48 @@ async def execute_task(task_id: str, user_message: str):
 
     try:
 
-        tasks[task_id]["status"] = "planning"
-        tasks[task_id]["progress"] = 10
+        update_task(
+            task_id,
+            {
+                "status": "planning",
+                "progress": 10,
+            }
+        )
 
         await asyncio.sleep(0.5)
 
-        tasks[task_id]["status"] = "working"
-        tasks[task_id]["progress"] = 30
+        update_task(
+            task_id,
+            {
+                "status": "working",
+                "progress": 30,
+            }
+        )
 
         result = await run_arios(user_message)
 
-        tasks[task_id]["status"] = "completed"
-        tasks[task_id]["progress"] = 100
-        tasks[task_id]["result"] = result
-        tasks[task_id]["completed_at"] = datetime.now(
-            timezone.utc
-        ).isoformat()
+        update_task(
+            task_id,
+            {
+                "status": "completed",
+                "progress": 100,
+                "result": result,
+                "completed_at": datetime.now(
+                    timezone.utc
+                ).isoformat(),
+            }
+        )
 
     except Exception as error:
 
-        tasks[task_id]["status"] = "failed"
-        tasks[task_id]["progress"] = 0
-        tasks[task_id]["error"] = str(error)
+        update_task(
+            task_id,
+            {
+                "status": "failed",
+                "progress": 0,
+                "error": str(error),
+            }
+        )
 
 
 # --------------------------------------------------
@@ -120,11 +165,12 @@ def root():
         "status": "online",
         "agent": "ARIOS",
         "mode": "autonomous-taskmaster",
+        "database": "firestore",
     }
 
 
 # --------------------------------------------------
-# Existing chat endpoint
+# Chat endpoint
 # --------------------------------------------------
 
 @app.post("/chat")
@@ -162,7 +208,11 @@ async def create_task(message: dict):
 
     task_id = str(uuid.uuid4())
 
-    tasks[task_id] = {
+    created_at = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    task = {
 
         "task_id": task_id,
 
@@ -176,12 +226,13 @@ async def create_task(message: dict):
 
         "error": None,
 
-        "created_at": datetime.now(
-            timezone.utc
-        ).isoformat(),
+        "created_at": created_at,
 
         "completed_at": None,
     }
+
+    # Store in Google Firestore
+    tasks_collection.document(task_id).set(task)
 
     asyncio.create_task(
         execute_task(
@@ -207,12 +258,12 @@ async def create_task(message: dict):
 @app.get("/tasks/{task_id}")
 async def get_task(task_id: str):
 
-    task = tasks.get(task_id)
+    # Get task from Firestore
+    document = tasks_collection.document(task_id).get()
 
-    if not task:
+    if document.exists:
+        return document.to_dict()
 
-        return {
-            "error": "Task not found."
-        }
-
-    return task
+    return {
+        "error": "Task not found."
+    }
