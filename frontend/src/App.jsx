@@ -1,64 +1,99 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import "./App.css";
 
 const API_URL = "https://arios-backend.onrender.com";
 
+const STATUS_STEPS = [
+  { key: "queued", label: "Request received" },
+  { key: "planning", label: "Planning task" },
+  { key: "working", label: "Executing task" },
+  { key: "completed", label: "Task completed" },
+];
+
 function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const [taskStatus, setTaskStatus] = useState("queued");
   const [taskProgress, setTaskProgress] = useState(0);
-  const [taskStatus, setTaskStatus] = useState("Preparing task...");
 
   const [chatHistory, setChatHistory] = useState([]);
   const [activePanel, setActivePanel] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [mobileSidebar, setMobileSidebar] = useState(false);
+  const [copiedIndex, setCopiedIndex] = useState(null);
 
-  /* --------------------------------------------------
-     Load chat history
-  -------------------------------------------------- */
+  const textareaRef = useRef(null);
+  const messagesEndRef = useRef(null);
+
+  /* -----------------------------
+     Load history
+  ----------------------------- */
 
   useEffect(() => {
-    const savedChats = localStorage.getItem("arios_chats");
+    try {
+      const saved = localStorage.getItem("arios_chats");
 
-    if (savedChats) {
-      try {
-        setChatHistory(JSON.parse(savedChats));
-      } catch {
-        setChatHistory([]);
+      if (saved) {
+        setChatHistory(JSON.parse(saved));
       }
+    } catch {
+      setChatHistory([]);
     }
   }, []);
 
-  /* --------------------------------------------------
-     Save chat history
-  -------------------------------------------------- */
+  /* -----------------------------
+     Save history
+  ----------------------------- */
 
   useEffect(() => {
-    if (chatHistory.length > 0) {
-      localStorage.setItem(
-        "arios_chats",
-        JSON.stringify(chatHistory)
-      );
-    }
+    localStorage.setItem(
+      "arios_chats",
+      JSON.stringify(chatHistory)
+    );
   }, [chatHistory]);
 
-  /* --------------------------------------------------
+  /* -----------------------------
+     Auto scroll
+  ----------------------------- */
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({
+      behavior: "smooth",
+    });
+  }, [messages, loading, taskProgress]);
+
+  /* -----------------------------
+     Auto resize textarea
+  ----------------------------- */
+
+  useEffect(() => {
+    if (!textareaRef.current) return;
+
+    textareaRef.current.style.height = "auto";
+
+    textareaRef.current.style.height = `${Math.min(
+      textareaRef.current.scrollHeight,
+      160
+    )}px`;
+  }, [input]);
+
+  /* -----------------------------
      Save current conversation
-  -------------------------------------------------- */
+  ----------------------------- */
 
   const saveCurrentChat = (currentMessages) => {
     if (!currentMessages.length) return;
 
-    const firstUserMessage = currentMessages.find(
+    const firstUser = currentMessages.find(
       (message) => message.role === "user"
     );
 
-    const title = firstUserMessage
-      ? firstUserMessage.content.slice(0, 35)
+    const title = firstUser
+      ? firstUser.content.slice(0, 42)
       : "New conversation";
 
     const chat = {
@@ -68,49 +103,109 @@ function App() {
     };
 
     setChatHistory((current) => {
-      const updated = [
-        chat,
-        ...current.filter((item) => item.title !== title),
-      ];
+      const filtered = current.filter(
+        (item) => item.title !== title
+      );
 
-      return updated.slice(0, 10);
+      return [chat, ...filtered].slice(0, 10);
     });
   };
 
-  /* --------------------------------------------------
+  /* -----------------------------
      New chat
-  -------------------------------------------------- */
+  ----------------------------- */
 
   const newChat = () => {
-    if (messages.length > 0) {
+    if (messages.length > 0 && !loading) {
       saveCurrentChat(messages);
     }
 
     setMessages([]);
     setInput("");
     setLoading(false);
+    setTaskStatus("queued");
     setTaskProgress(0);
-    setTaskStatus("Preparing task...");
     setActivePanel(null);
     setMenuOpen(false);
+    setMobileSidebar(false);
+
+    setTimeout(() => {
+      textareaRef.current?.focus();
+    }, 100);
   };
 
-  /* --------------------------------------------------
-     Load previous chat
-  -------------------------------------------------- */
+  /* -----------------------------
+     Load chat
+  ----------------------------- */
 
   const loadChat = (chat) => {
     if (loading) return;
 
     setMessages(chat.messages);
     setInput("");
+    setTaskStatus("completed");
+    setTaskProgress(100);
     setActivePanel(null);
     setMenuOpen(false);
+    setMobileSidebar(false);
   };
 
-  /* --------------------------------------------------
+  /* -----------------------------
+     Clear history
+  ----------------------------- */
+
+  const clearHistory = () => {
+    setChatHistory([]);
+    localStorage.removeItem("arios_chats");
+  };
+
+  /* -----------------------------
+     Poll task
+  ----------------------------- */
+
+  const pollTask = async (taskId) => {
+    const maxAttempts = 120;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, 1200)
+      );
+
+      const response = await fetch(
+        `${API_URL}/tasks/${taskId}`
+      );
+
+      if (!response.ok) {
+        throw new Error("Unable to check task status.");
+      }
+
+      const task = await response.json();
+
+      setTaskStatus(task.status || "working");
+
+      if (typeof task.progress === "number") {
+        setTaskProgress(task.progress);
+      }
+
+      if (task.status === "completed") {
+        return task;
+      }
+
+      if (task.status === "failed") {
+        throw new Error(
+          task.error || "ARIOS could not complete the task."
+        );
+      }
+    }
+
+    throw new Error(
+      "The task is taking longer than expected."
+    );
+  };
+
+  /* -----------------------------
      Send message
-  -------------------------------------------------- */
+  ----------------------------- */
 
   const sendMessage = async () => {
     const text = input.trim();
@@ -120,22 +215,20 @@ function App() {
     const userMessage = {
       role: "user",
       content: text,
+      timestamp: new Date().toISOString(),
     };
 
-    const updatedMessages = [...messages, userMessage];
+    setMessages((current) => [
+      ...current,
+      userMessage,
+    ]);
 
-    setMessages(updatedMessages);
     setInput("");
     setLoading(true);
-
-    setTaskProgress(5);
-    setTaskStatus("Sending task to ARIOS...");
+    setTaskStatus("queued");
+    setTaskProgress(0);
 
     try {
-      /* --------------------------------------------------
-         Create task
-      -------------------------------------------------- */
-
       const response = await fetch(`${API_URL}/tasks`, {
         method: "POST",
         headers: {
@@ -147,805 +240,861 @@ function App() {
       });
 
       if (!response.ok) {
-        throw new Error("Failed to create task");
+        throw new Error(
+          "ARIOS could not create the task."
+        );
       }
 
       const task = await response.json();
 
-      setTaskProgress(10);
-      setTaskStatus("Task received");
+      setTaskStatus(task.status || "queued");
 
-      let completed = false;
-
-      /* --------------------------------------------------
-         Poll task status
-      -------------------------------------------------- */
-
-      while (!completed) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, 1200)
-        );
-
-        const statusResponse = await fetch(
-          `${API_URL}/tasks/${task.task_id}`
-        );
-
-        if (!statusResponse.ok) {
-          throw new Error("Failed to check task status");
-        }
-
-        const status = await statusResponse.json();
-
-        const progress =
-          typeof status.progress === "number"
-            ? status.progress
-            : 0;
-
-        setTaskProgress(progress);
-
-        if (status.status === "queued") {
-          setTaskStatus("Task queued");
-        } else if (status.status === "planning") {
-          setTaskStatus("Planning your task");
-        } else if (status.status === "working") {
-          setTaskStatus("ARIOS is working");
-        } else if (status.status === "completed") {
-          setTaskProgress(100);
-          setTaskStatus("Task completed");
-
-          setMessages((current) => [
-            ...current,
-            {
-              role: "assistant",
-              content:
-                status.result || "Task completed.",
-            },
-          ]);
-
-          completed = true;
-        }
-
-        if (status.status === "failed") {
-          throw new Error(
-            status.error ||
-              "ARIOS could not complete the task."
-          );
-        }
-      }
-    } catch (error) {
-      console.error(error);
-
-      setTaskProgress(0);
-      setTaskStatus("Something went wrong");
+      const completedTask = await pollTask(
+        task.task_id
+      );
 
       setMessages((current) => [
         ...current,
         {
           role: "assistant",
           content:
-            "Sorry, I couldn't complete this task. Please try again.",
+            completedTask.result ||
+            "Task completed successfully.",
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+
+      setTaskStatus("completed");
+      setTaskProgress(100);
+    } catch (error) {
+      console.error(error);
+
+      setTaskStatus("failed");
+      setTaskProgress(0);
+
+      setMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          error: true,
+          content:
+            "I couldn't complete that task.\n\n" +
+            `**Reason:** ${
+              error.message || "Something went wrong."
+            }`,
+          timestamp: new Date().toISOString(),
         },
       ]);
     } finally {
       setLoading(false);
+
+      setTimeout(() => {
+        textareaRef.current?.focus();
+      }, 100);
     }
   };
 
-  /* --------------------------------------------------
-     Keyboard handling
-  -------------------------------------------------- */
+  /* -----------------------------
+     Keyboard
+  ----------------------------- */
 
   const handleKeyDown = (event) => {
-    if (event.key === "Enter" && !event.shiftKey) {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey
+    ) {
       event.preventDefault();
       sendMessage();
     }
   };
 
-  /* --------------------------------------------------
+  /* -----------------------------
      Suggestions
-  -------------------------------------------------- */
+  ----------------------------- */
 
   const useSuggestion = (text) => {
     setInput(text);
     setActivePanel(null);
+    setMenuOpen(false);
 
     setTimeout(() => {
-      document.querySelector(".chat-input")?.focus();
+      textareaRef.current?.focus();
     }, 50);
   };
 
-  /* --------------------------------------------------
-     Clear history
-  -------------------------------------------------- */
+  /* -----------------------------
+     Copy response
+  ----------------------------- */
 
-  const clearHistory = () => {
-    setChatHistory([]);
-    localStorage.removeItem("arios_chats");
+  const copyMessage = async (content, index) => {
+    try {
+      await navigator.clipboard.writeText(content);
+
+      setCopiedIndex(index);
+
+      setTimeout(() => {
+        setCopiedIndex(null);
+      }, 1600);
+    } catch (error) {
+      console.error(error);
+    }
   };
 
+  /* -----------------------------
+     Retry
+  ----------------------------- */
+
+  const retryLastMessage = () => {
+    if (loading) return;
+
+    const lastUserMessage = [...messages]
+      .reverse()
+      .find((message) => message.role === "user");
+
+    if (!lastUserMessage) return;
+
+    setInput(lastUserMessage.content);
+
+    setTimeout(() => {
+      textareaRef.current?.focus();
+    }, 50);
+  };
+
+  /* -----------------------------
+     Status helpers
+  ----------------------------- */
+
+  const getStatusLabel = () => {
+    switch (taskStatus) {
+      case "queued":
+        return "Request received";
+
+      case "planning":
+        return "Planning your task";
+
+      case "working":
+        return "ARIOS is working";
+
+      case "completed":
+        return "Task completed";
+
+      case "failed":
+        return "Task failed";
+
+      default:
+        return "Working";
+    }
+  };
+
+  const getActiveStep = () => {
+    if (taskStatus === "queued") return 0;
+    if (taskStatus === "planning") return 1;
+    if (taskStatus === "working") return 2;
+    if (taskStatus === "completed") return 3;
+
+    return 0;
+  };
+
+  const formatTime = (timestamp) => {
+    if (!timestamp) return "";
+
+    try {
+      return new Date(timestamp).toLocaleTimeString(
+        [],
+        {
+          hour: "2-digit",
+          minute: "2-digit",
+        }
+      );
+    } catch {
+      return "";
+    }
+  };
+
+  /* -----------------------------
+     Render
+  ----------------------------- */
+
   return (
-    <div className="app">
+    <div className="app-shell">
 
-      {/* ==================================================
+      {/* Mobile backdrop */}
+
+      {mobileSidebar && (
+        <div
+          className="mobile-backdrop"
+          onClick={() => setMobileSidebar(false)}
+        />
+      )}
+
+      {/* =========================================
           SIDEBAR
-      ================================================== */}
+      ========================================== */}
 
-      <aside className="sidebar">
+      <aside
+        className={`sidebar ${
+          mobileSidebar ? "sidebar-open" : ""
+        }`}
+      >
 
-        <div className="sidebar-top">
+        <div className="sidebar-inner">
 
-          {/* Logo */}
+          {/* Brand */}
 
-          <div className="logo">
-
-            <div className="logo-mark">
-              ◈
+          <div className="brand">
+            <div className="brand-mark">
+              <span>◈</span>
             </div>
 
-            <div className="logo-copy">
-              <div className="logo-text">
+            <div className="brand-copy">
+              <div className="brand-name">
                 ARIOS
               </div>
 
-              <div className="logo-subtitle">
+              <div className="brand-caption">
                 AI TASKMASTER
               </div>
             </div>
-
           </div>
 
-          {/* New Chat */}
+          {/* New chat */}
 
           <button
-            className="new-chat"
+            className="new-chat-button"
             onClick={newChat}
           >
-            <span className="new-chat-icon">
-              ＋
+            <span className="new-chat-plus">
+              +
             </span>
 
-            <span>
-              New Chat
+            <span>New conversation</span>
+
+            <span className="new-chat-shortcut">
+              ⌘ K
             </span>
           </button>
 
-          {/* Recent Chats */}
+          {/* History */}
 
-          <div className="chat-history">
+          <div className="history-section">
 
-            <div className="history-header">
-
-              <p className="history-title">
-                RECENT CHATS
-              </p>
+            <div className="section-heading">
+              <span>RECENT</span>
 
               {chatHistory.length > 0 && (
                 <button
-                  className="clear-history"
                   onClick={clearHistory}
+                  className="clear-button"
                 >
                   Clear
                 </button>
               )}
-
             </div>
 
             {chatHistory.length === 0 ? (
-
-              <div className="empty-history">
-
-                <span className="empty-history-icon">
+              <div className="history-empty">
+                <div className="history-empty-icon">
                   ◌
-                </span>
-
-                <p>
-                  No recent chats
-                </p>
+                </div>
 
                 <span>
-                  Start a conversation
+                  Your conversations will appear here.
                 </span>
-
               </div>
-
             ) : (
-
               <div className="history-list">
-
                 {chatHistory.map((chat) => (
-
                   <button
-                    className="chat-item"
                     key={chat.id}
+                    className="history-item"
                     onClick={() => loadChat(chat)}
                   >
-
-                    <span className="chat-item-icon">
+                    <span className="history-icon">
                       ◈
                     </span>
 
-                    <span className="chat-item-title">
+                    <span className="history-title">
                       {chat.title}
                     </span>
-
                   </button>
-
                 ))}
-
               </div>
-
             )}
 
           </div>
 
         </div>
 
-        {/* Sidebar Bottom */}
+        {/* Sidebar bottom */}
 
-        <div className="sidebar-bottom">
+        <div className="sidebar-footer">
 
           <button
-            onClick={() => {
-              setActivePanel("settings");
-              setMenuOpen(false);
-            }}
+            className="sidebar-action"
+            onClick={() =>
+              setActivePanel("settings")
+            }
           >
-            <span>
-              ⚙
-            </span>
-
-            Settings
+            <span>⚙</span>
+            <span>Settings</span>
           </button>
 
           <button
-            onClick={() => {
-              setActivePanel("about");
-              setMenuOpen(false);
-            }}
+            className="sidebar-action"
+            onClick={() =>
+              setActivePanel("about")
+            }
           >
-            <span>
-              ⓘ
-            </span>
-
-            About ARIOS
+            <span>ⓘ</span>
+            <span>About ARIOS</span>
           </button>
+
+          <div className="sidebar-version">
+            <span className="online-dot" />
+            ARIOS online
+            <span>v1.0</span>
+          </div>
 
         </div>
 
       </aside>
 
-
-      {/* ==================================================
+      {/* =========================================
           MAIN
-      ================================================== */}
+      ========================================== */}
 
       <main className="main">
 
         {/* Header */}
 
-        <header className="header">
+        <header className="topbar">
 
-          <div className="mobile-logo">
-
-            <span>
-              ◈
-            </span>
-
-            <strong>
-              ARIOS
-            </strong>
-
-          </div>
-
-          <div className="header-status">
-
-            <span className="status-dot"></span>
-
-            <span>
-              Online
-            </span>
-
-          </div>
-
-          <div className="header-actions">
+          <div className="topbar-left">
 
             <button
-              className="header-new-chat"
-              onClick={newChat}
+              className="mobile-menu-button"
+              onClick={() =>
+                setMobileSidebar(true)
+              }
             >
-              <span>
-                ＋
-              </span>
-
-              New Chat
+              ☰
             </button>
 
-            <div className="menu-container">
+            <div className="conversation-label">
 
-              <button
-                className="icon-button"
-                onClick={() =>
-                  setMenuOpen(!menuOpen)
-                }
-              >
-                ⋯
-              </button>
+              <span className="conversation-kicker">
+                WORKSPACE
+              </span>
 
-              {menuOpen && (
-
-                <div className="dropdown-menu">
-
-                  <button
-                    onClick={() => {
-                      setActivePanel("settings");
-                      setMenuOpen(false);
-                    }}
-                  >
-                    ⚙ Settings
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setActivePanel("about");
-                      setMenuOpen(false);
-                    }}
-                  >
-                    ⓘ About ARIOS
-                  </button>
-
-                  <div className="menu-divider"></div>
-
-                  <button onClick={newChat}>
-                    ＋ New Chat
-                  </button>
-
-                </div>
-
-              )}
+              <span className="conversation-name">
+                {messages.length
+                  ? "Current conversation"
+                  : "New conversation"}
+              </span>
 
             </div>
+
+          </div>
+
+          <div className="topbar-right">
+
+            <div className="online-status">
+              <span className="online-dot" />
+              <span>Operational</span>
+            </div>
+
+            <button
+              className="topbar-new"
+              onClick={newChat}
+            >
+              <span>+</span>
+              New
+            </button>
+
+            <button
+              className="topbar-menu"
+              onClick={() =>
+                setMenuOpen(!menuOpen)
+              }
+            >
+              ⋯
+            </button>
+
+            {menuOpen && (
+              <div className="dropdown">
+
+                <button
+                  onClick={() => {
+                    setActivePanel("settings");
+                    setMenuOpen(false);
+                  }}
+                >
+                  ⚙ Settings
+                </button>
+
+                <button
+                  onClick={() => {
+                    setActivePanel("about");
+                    setMenuOpen(false);
+                  }}
+                >
+                  ⓘ About ARIOS
+                </button>
+
+                <div className="dropdown-line" />
+
+                <button onClick={newChat}>
+                  + New conversation
+                </button>
+
+              </div>
+            )}
 
           </div>
 
         </header>
 
-
-        {/* ==================================================
+        {/* =========================================
             CHAT AREA
-        ================================================== */}
+        ========================================== */}
 
-        <section className="chat-container">
+        <section className="chat-area">
 
-          {/* --------------------------------------------------
-              WELCOME SCREEN
-          -------------------------------------------------- */}
+          {messages.length === 0 ? (
 
-          {messages.length === 0 && (
+            /* =====================================
+               EMPTY STATE
+            ====================================== */
 
-            <div className="welcome">
+            <div className="empty-state">
 
-              <div className="ai-icon">
+              <div className="hero-orb">
 
-                <div className="ai-icon-glow"></div>
+                <div className="orb-ring ring-one" />
+                <div className="orb-ring ring-two" />
 
-                <span>
+                <div className="orb-core">
                   ◈
-                </span>
+                </div>
 
               </div>
 
-              <div className="welcome-badge">
-
-                <span className="status-dot"></span>
-
+              <div className="ready-pill">
+                <span className="online-dot" />
                 ARIOS is ready
-
               </div>
 
               <h1>
-                How can I help you?
+                What should I
+                <span> get done?</span>
               </h1>
 
-              <p className="welcome-description">
-                I'm ARIOS, your intelligent AI taskmaster.
-                <br />
-                Give me a task and I'll work on it for you.
+              <p className="hero-description">
+                Give ARIOS a task. It will plan the
+                work, execute it, and return the result.
               </p>
 
-
-              {/* Suggestions */}
-
-              <div className="suggestions">
+              <div className="suggestion-grid">
 
                 <button
-                  className="suggestion-card"
+                  className="suggestion"
                   onClick={() =>
                     useSuggestion(
-                      "Explain data structures simply"
+                      "Explain recursion simply with an example"
                     )
                   }
                 >
-
-                  <div className="suggestion-icon">
+                  <div className="suggestion-symbol">
                     ✦
                   </div>
 
-                  <div className="suggestion-text">
-
+                  <div>
                     <strong>
-                      Explain something
+                      Explain a concept
                     </strong>
 
                     <span>
-                      Break down a concept clearly
+                      Make something difficult easy
                     </span>
-
                   </div>
 
-                  <span className="suggestion-arrow">
-                    →
-                  </span>
-
+                  <b>↗</b>
                 </button>
 
-
                 <button
-                  className="suggestion-card"
+                  className="suggestion"
                   onClick={() =>
                     useSuggestion(
-                      "Create a study plan for data structures"
+                      "Create a 7-day study plan for data structures"
                     )
                   }
                 >
-
-                  <div className="suggestion-icon">
+                  <div className="suggestion-symbol">
                     ◫
                   </div>
 
-                  <div className="suggestion-text">
-
+                  <div>
                     <strong>
-                      Create a plan
+                      Build a plan
                     </strong>
 
                     <span>
-                      Build a structured plan for me
+                      Turn a goal into clear steps
                     </span>
-
                   </div>
 
-                  <span className="suggestion-arrow">
-                    →
-                  </span>
-
+                  <b>↗</b>
                 </button>
 
-
                 <button
-                  className="suggestion-card"
+                  className="suggestion"
                   onClick={() =>
                     useSuggestion(
-                      "Calculate 25 × 48 and explain the result"
+                      "Calculate 25 × 48 and explain the calculation"
                     )
                   }
                 >
-
-                  <div className="suggestion-icon">
-                    ⌘
+                  <div className="suggestion-symbol">
+                    ∑
                   </div>
 
-                  <div className="suggestion-text">
-
+                  <div>
                     <strong>
-                      Calculate something
+                      Solve something
                     </strong>
 
                     <span>
-                      Get accurate results quickly
+                      Calculate and explain the answer
                     </span>
-
                   </div>
 
-                  <span className="suggestion-arrow">
-                    →
-                  </span>
-
+                  <b>↗</b>
                 </button>
 
               </div>
 
             </div>
 
-          )}
+          ) : (
 
+            /* =====================================
+               MESSAGES
+            ====================================== */
 
-          {/* --------------------------------------------------
-              MESSAGES
-          -------------------------------------------------- */}
+            <div className="messages-wrapper">
 
-          {messages.length > 0 && (
+              <div className="messages">
 
-            <div className="messages">
+                {messages.map(
+                  (message, index) => (
 
-              {messages.map((message, index) => (
+                    <div
+                      key={index}
+                      className={`message ${
+                        message.role
+                      }`}
+                    >
 
-                <div
-                  className={`message-row ${message.role}`}
-                  key={index}
-                >
+                      {message.role ===
+                      "assistant" ? (
 
-                  <div className="message-avatar">
-
-                    {message.role === "assistant" ? (
-                      <span>
-                        ◈
-                      </span>
-                    ) : (
-                      <span>
-                        You
-                      </span>
-                    )}
-
-                  </div>
-
-                  <div className="message-content">
-
-                    {message.role === "assistant" ? (
-
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                      >
-                        {message.content}
-                      </ReactMarkdown>
-
-                    ) : (
-
-                      message.content
-
-                    )}
-
-                  </div>
-
-                </div>
-
-              ))}
-
-
-              {/* --------------------------------------------------
-                  AGENT WORKING CARD
-              -------------------------------------------------- */}
-
-              {loading && (
-
-                <div className="message-row assistant">
-
-                  <div className="message-avatar">
-
-                    <span>
-                      ◈
-                    </span>
-
-                  </div>
-
-
-                  <div className="agent-card">
-
-                    {/* Top */}
-
-                    <div className="agent-card-header">
-
-                      <div className="agent-identity">
-
-                        <div className="agent-pulse">
-                          <span></span>
+                        <div className="assistant-avatar">
+                          ◈
                         </div>
 
-                        <div>
+                      ) : (
+                        <div className="user-avatar">
+                          YOU
+                        </div>
+                      )}
+
+                      <div className="message-main">
+
+                        <div className="message-meta">
 
                           <strong>
-                            ARIOS
+                            {message.role ===
+                            "assistant"
+                              ? "ARIOS"
+                              : "You"}
                           </strong>
 
                           <span>
-                            AUTONOMOUS TASK
+                            {formatTime(
+                              message.timestamp
+                            )}
                           </span>
 
                         </div>
 
-                      </div>
+                        <div
+                          className={`message-body ${
+                            message.error
+                              ? "message-error"
+                              : ""
+                          }`}
+                        >
 
-                      <div className="agent-percentage">
-                        {taskProgress}%
-                      </div>
+                          {message.role ===
+                          "assistant" ? (
+                            <ReactMarkdown
+                              remarkPlugins={[
+                                remarkGfm,
+                              ]}
+                            >
+                              {message.content}
+                            </ReactMarkdown>
+                          ) : (
+                            <p>
+                              {message.content}
+                            </p>
+                          )}
 
-                    </div>
+                        </div>
 
+                        {message.role ===
+                          "assistant" && (
+                          <div className="message-actions">
 
-                    {/* Progress */}
+                            <button
+                              onClick={() =>
+                                copyMessage(
+                                  message.content,
+                                  index
+                                )
+                              }
+                            >
+                              {copiedIndex ===
+                              index
+                                ? "✓ Copied"
+                                : "Copy"}
+                            </button>
 
-                    <div className="agent-progress-track">
+                            {message.error && (
+                              <button
+                                onClick={
+                                  retryLastMessage
+                                }
+                              >
+                                Retry
+                              </button>
+                            )}
 
-                      <div
-                        className="agent-progress-fill"
-                        style={{
-                          width: `${taskProgress}%`,
-                        }}
-                      >
-
-                        <div className="progress-shine"></div>
-
-                      </div>
-
-                    </div>
-
-
-                    {/* Steps */}
-
-                    <div className="agent-steps">
-
-                      <div
-                        className={
-                          taskProgress >= 10
-                            ? "agent-step active"
-                            : "agent-step"
-                        }
-                      >
-
-                        <span>
-                          {taskProgress >= 10
-                            ? "✓"
-                            : "○"}
-                        </span>
-
-                        Planning
-
-                      </div>
-
-
-                      <div
-                        className={
-                          taskProgress >= 30
-                            ? "agent-step active"
-                            : "agent-step"
-                        }
-                      >
-
-                        <span>
-                          {taskProgress >= 30
-                            ? "✓"
-                            : "○"}
-                        </span>
-
-                        Executing
-
-                      </div>
-
-
-                      <div
-                        className={
-                          taskProgress >= 100
-                            ? "agent-step active"
-                            : "agent-step"
-                        }
-                      >
-
-                        <span>
-                          {taskProgress >= 100
-                            ? "✓"
-                            : "○"}
-                        </span>
-
-                        Finishing
+                          </div>
+                        )}
 
                       </div>
 
                     </div>
 
+                  )
+                )}
 
-                    {/* Status */}
+                {/* =================================
+                    AGENT WORK CARD
+                ================================== */}
 
-                    <div className="agent-status">
+                {loading && (
+                  <div className="agent-work">
 
-                      <span className="agent-status-dot"></span>
+                    <div className="work-icon">
+                      <div className="work-pulse">
+                        ◈
+                      </div>
+                    </div>
 
-                      <span>
-                        {taskStatus}
-                      </span>
+                    <div className="work-content">
 
-                      <span className="agent-status-dots">
-                        •••
-                      </span>
+                      <div className="work-header">
+
+                        <div>
+                          <strong>
+                            {getStatusLabel()}
+                          </strong>
+
+                          <span>
+                            ARIOS autonomous task
+                          </span>
+                        </div>
+
+                        <span className="work-percent">
+                          {taskProgress}%
+                        </span>
+
+                      </div>
+
+                      <div className="progress-track">
+                        <div
+                          className="progress-fill"
+                          style={{
+                            width: `${Math.max(
+                              taskProgress,
+                              4
+                            )}%`,
+                          }}
+                        />
+                      </div>
+
+                      <div className="work-steps">
+
+                        {STATUS_STEPS.map(
+                          (step, index) => {
+
+                            const active =
+                              getActiveStep();
+
+                            const completed =
+                              index < active;
+
+                            const current =
+                              index === active;
+
+                            return (
+                              <div
+                                key={step.key}
+                                className={`work-step ${
+                                  completed
+                                    ? "complete"
+                                    : ""
+                                } ${
+                                  current
+                                    ? "current"
+                                    : ""
+                                }`}
+                              >
+
+                                <span className="step-dot">
+                                  {completed
+                                    ? "✓"
+                                    : current
+                                    ? "•"
+                                    : ""}
+                                </span>
+
+                                <span>
+                                  {step.label}
+                                </span>
+
+                              </div>
+                            );
+                          }
+                        )}
+
+                      </div>
 
                     </div>
 
                   </div>
+                )}
 
-                </div>
+                <div ref={messagesEndRef} />
 
-              )}
+              </div>
 
             </div>
 
           )}
 
+          {/* =======================================
+              COMPOSER
+          ======================================== */}
 
-          {/* --------------------------------------------------
-              INPUT
-          -------------------------------------------------- */}
+          <div className="composer-zone">
 
-          <div className="input-area">
-
-            <div className="input-wrapper">
+            <div className="composer">
 
               <textarea
-                className="chat-input"
+                ref={textareaRef}
                 value={input}
                 onChange={(event) =>
                   setInput(event.target.value)
                 }
                 onKeyDown={handleKeyDown}
-                placeholder="Message ARIOS..."
-                rows="1"
+                placeholder={
+                  loading
+                    ? "ARIOS is working..."
+                    : "Give ARIOS a task..."
+                }
+                rows={1}
                 disabled={loading}
               />
 
-              <button
-                className="send-button"
-                onClick={sendMessage}
-                disabled={
-                  loading ||
-                  !input.trim()
-                }
-                title="Send message"
-              >
-                ↑
-              </button>
+              <div className="composer-bottom">
+
+                <div className="composer-info">
+
+                  <span className="composer-ai">
+                    ◈
+                  </span>
+
+                  <span>
+                    {loading
+                      ? "Autonomous task in progress"
+                      : "ARIOS can plan and execute tasks"}
+                  </span>
+
+                </div>
+
+                <div className="composer-actions">
+
+                  <span className="enter-hint">
+                    Enter ↵
+                  </span>
+
+                  <button
+                    className="send-button"
+                    onClick={sendMessage}
+                    disabled={
+                      loading ||
+                      !input.trim()
+                    }
+                    aria-label="Send message"
+                  >
+                    ↑
+                  </button>
+
+                </div>
+
+              </div>
 
             </div>
 
-            <p className="disclaimer">
-              ARIOS can make mistakes. Check important information.
+            <p className="composer-disclaimer">
+              ARIOS can make mistakes. Verify important
+              information.
             </p>
 
           </div>
 
         </section>
 
-
-        {/* ==================================================
+        {/* =========================================
             SETTINGS
-        ================================================== */}
+        ========================================== */}
 
         {activePanel === "settings" && (
-
           <div
-            className="overlay"
-            onClick={(event) => {
-              if (event.target === event.currentTarget) {
-                setActivePanel(null);
-              }
-            }}
+            className="modal-backdrop"
+            onClick={() =>
+              setActivePanel(null)
+            }
           >
+            <div
+              className="modal"
+              onClick={(event) =>
+                event.stopPropagation()
+              }
+            >
 
-            <div className="panel">
-
-              <div className="panel-header">
+              <div className="modal-header">
 
                 <div>
-
-                  <span className="panel-label">
-                    ARIOS
-                  </span>
-
-                  <h2>
-                    Settings
-                  </h2>
-
+                  <span>ARIOS</span>
+                  <h2>Settings</h2>
                 </div>
 
                 <button
-                  className="close-button"
+                  className="modal-close"
                   onClick={() =>
                     setActivePanel(null)
                   }
@@ -955,98 +1104,91 @@ function App() {
 
               </div>
 
+              <div className="setting-card">
 
-              <div className="setting-item">
+                <div className="setting-icon">
+                  ◈
+                </div>
 
                 <div>
-
                   <strong>
-                    AI Taskmaster
+                    Autonomous taskmaster
                   </strong>
 
                   <p>
-                    ARIOS handles your requests through
-                    its autonomous task system.
+                    ARIOS receives your request,
+                    creates a background task, and
+                    executes it through the agent.
                   </p>
-
                 </div>
 
-                <span className="setting-status">
-                  Active
+                <span className="setting-badge">
+                  ACTIVE
                 </span>
 
               </div>
 
+              <div className="setting-card">
 
-              <div className="setting-item">
+                <div className="setting-icon">
+                  ◷
+                </div>
 
                 <div>
-
                   <strong>
-                    Chat History
+                    Local chat history
                   </strong>
 
                   <p>
-                    Conversations are saved locally in
-                    this browser.
+                    Your recent conversations are
+                    stored locally in this browser.
                   </p>
-
                 </div>
 
-                <span className="setting-status">
-                  Local
+                <span className="setting-badge">
+                  LOCAL
                 </span>
 
               </div>
-
 
               <button
-                className="panel-danger"
+                className="danger-button"
                 onClick={clearHistory}
               >
-                Clear All Chat History
+                Clear all chat history
               </button>
 
             </div>
-
           </div>
-
         )}
 
-
-        {/* ==================================================
+        {/* =========================================
             ABOUT
-        ================================================== */}
+        ========================================== */}
 
         {activePanel === "about" && (
-
           <div
-            className="overlay"
-            onClick={(event) => {
-              if (event.target === event.currentTarget) {
-                setActivePanel(null);
-              }
-            }}
+            className="modal-backdrop"
+            onClick={() =>
+              setActivePanel(null)
+            }
           >
+            <div
+              className="modal about-modal"
+              onClick={(event) =>
+                event.stopPropagation()
+              }
+            >
 
-            <div className="panel about-panel">
-
-              <div className="panel-header">
+              <div className="modal-header">
 
                 <div>
-
-                  <span className="panel-label">
-                    ABOUT
-                  </span>
-
-                  <h2>
-                    ARIOS
-                  </h2>
-
+                  <span>ABOUT</span>
+                  <h2>ARIOS</h2>
                 </div>
 
                 <button
-                  className="close-button"
+                  className="modal-close"
                   onClick={() =>
                     setActivePanel(null)
                   }
@@ -1056,52 +1198,37 @@ function App() {
 
               </div>
 
-
-              <div className="about-logo">
+              <div className="about-mark">
                 ◈
               </div>
 
               <h3>
-                Autonomous Reasoning &amp;
+                Autonomous Reasoning &
+                <br />
                 Intelligence Operating System
               </h3>
 
               <p>
-                ARIOS is a general-purpose AI taskmaster
-                designed to understand requests, execute
-                tasks asynchronously, and return useful
-                results.
+                ARIOS is a general-purpose AI
+                taskmaster designed to understand
+                requests, execute tasks asynchronously,
+                and return useful results.
               </p>
 
+              <div className="tech-stack">
 
-              <div className="about-tags">
-
-                <span>
-                  Google ADK
-                </span>
-
-                <span>
-                  Gemini
-                </span>
-
-                <span>
-                  FastAPI
-                </span>
-
-                <span>
-                  Firestore
-                </span>
-
+                <span>Google ADK</span>
+                <span>Gemini</span>
+                <span>FastAPI</span>
+                <span>Firestore</span>
+                <span>React</span>
               </div>
 
             </div>
-
           </div>
-
         )}
 
       </main>
-
     </div>
   );
 }
