@@ -1,8 +1,8 @@
-# 🤖 ARIOS — AI Assistant
+# 🤖 ARIOS — Autonomous AI Taskmaster
 
 **ARIOS** is a general-purpose AI assistant built with **React, FastAPI, Google ADK, and Gemini**.
 
-It provides a modern chatbot interface for asking questions, solving problems, performing calculations, explaining concepts, and assisting with coding.
+ARIOS is an autonomous AI taskmaster built to understand user requests, execute them asynchronously, track task progress, and return results through a modern web interface.
 
 [![Live Demo](https://img.shields.io/badge/Live-Demo-brightgreen?style=for-the-badge)](https://arios-ai.vercel.app/)
 [![GitHub](https://img.shields.io/badge/GitHub-Repository-181717?style=for-the-badge&logo=github)](https://github.com/aryan6002261/arios-ai)
@@ -43,29 +43,43 @@ ARIOS is publicly deployed and accessible through the web.
 - ☁️ Cloud-deployed backend
 - 🌐 Public web application
 - 🔄 Automatic deployment through GitHub
+- 🤖 Autonomous task execution
+- ⚡ Asynchronous background task processing
+- 📊 Real-time task status and progress tracking
+- 🧠 Google Gemini-powered reasoning
+- 🔗 Google ADK agent architecture
+- 💾 Firestore integration
+- 💬 Persistent local chat history
+- 📝 Markdown + GitHub Flavored Markdown rendering
+- 📱 Responsive web interface
+- ⚙️ Task and system status handling
+- 🔌 REST API architecture
+- 🛡️ Graceful AI/API error handling
 
 ---
 
 ## 🛠️ Tech Stack
 
 ### Frontend
-
 - React
 - Vite
 - JavaScript
 - CSS
+- Firebase SDK
 
 ### Backend
-
 - Python
 - FastAPI
 - Uvicorn
 - Google ADK
 - Google Gen AI
 
-### AI
+### Database
+- Google Cloud Firestore
 
+### AI
 - Google Gemini
+- Google ADK
 
 ---
 
@@ -73,34 +87,36 @@ ARIOS is publicly deployed and accessible through the web.
 
 ```text
                          🌎 USER
-                           │
-                           ▼
-              ┌────────────────────────┐
-              │      React + Vite      │
-              │       Frontend         │
-              │       Vercel           │
-              └───────────┬────────────┘
-                          │
-                     HTTPS / REST
-                          │
-                          ▼
-              ┌────────────────────────┐
-              │        FastAPI         │
-              │        Backend         │
-              │        Render          │
-              └───────────┬────────────┘
-                          │
-                          ▼
-              ┌────────────────────────┐
-              │      Google ADK        │
-              │      ARIOS Agent       │
-              └───────────┬────────────┘
-                          │
-                          ▼
-              ┌────────────────────────┐
-              │        Gemini          │
-              │      Language Model    │
-              └────────────────────────┘
+                            │
+                            ▼
+                 ┌─────────────────────┐
+                 │    React + Vite     │
+                 │      Frontend       │
+                 │       Vercel        │
+                 └──────────┬──────────┘
+                            │
+                       HTTPS / REST
+                            │
+                            ▼
+                 ┌─────────────────────┐
+                 │       FastAPI       │
+                 │      Backend        │
+                 │       Render        │
+                 └──────┬───────┬──────┘
+                        │       │
+                 Task System     │
+                        │        │
+                        ▼        ▼
+              ┌────────────┐  ┌──────────────┐
+              │ Google ADK │  │  Firestore   │
+              │ ARIOS Agent│  │   Database   │
+              └──────┬─────┘  └──────────────┘
+                     │
+                     ▼
+              ┌────────────┐
+              │   Gemini   │
+              │     AI     │
+              └────────────┘
 ```
 
 ---
@@ -123,14 +139,45 @@ arios-ai/
 │   ├── src/
 │   │   ├── App.jsx
 │   │   ├── App.css
+│   │   ├── firebase.js
 │   │   └── main.jsx
 │   ├── index.html
 │   ├── package.json
 │   └── vite.config.js
 │
+├── Dockerfile
 ├── .gitignore
 └── README.md
 ```
+
+---
+
+## 🔌 API
+
+### Health Check
+GET /
+
+### Chat
+POST /chat
+
+### Create Task
+POST /tasks
+
+### Get Task Status
+GET /tasks/{task_id}
+
+---
+
+## 🧠 How ARIOS Works
+
+1. The user submits a task through the React frontend.
+2. The frontend sends the request to the FastAPI backend.
+3. FastAPI creates an autonomous task and returns a unique task ID.
+4. ARIOS processes the request using Google ADK and Gemini.
+5. Task progress and status are tracked by the backend.
+6. The frontend polls the task endpoint for updates.
+7. Once completed, the generated result is returned to the user.
+8. Firestore provides persistent cloud data storage.
 
 ---
 
@@ -159,19 +206,23 @@ GitHub
    
 ## 🔮 Future Improvements
 
-- [ ] Persistent conversation history
 - [ ] User authentication
-- [ ] Markdown rendering
-- [ ] Code syntax highlighting
-- [ ] Voice input and output
 - [ ] File uploads
 - [ ] Web search
-- [ ] Additional AI tools
-- [ ] Dark/light theme
-- [ ] Mobile optimization
-- [ ] Streaming AI responses
-- [ ] Conversation memory
-- [ ] Custom AI personas
+- [ ] Voice interaction
+- [ ] Long-term conversation memory
+- [ ] Custom AI tools
+- [ ] Streaming responses
+- [ ] Multi-user task management
+- [ ] Task completion notifications
+
+---
+
+## ⚠️ Current Limitations
+
+ARIOS currently relies on the available Gemini API quota. During periods of high usage, AI requests may temporarily fail when the configured API quota is exhausted.
+
+The application handles these failures gracefully and allows the user to retry later.
 
 ---
  
