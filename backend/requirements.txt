@@ -1,3 +1,5 @@
 fastapi
 uvicorn[standard]
 google-adk
+google-cloud-firestore
+google-cloud-firestore
