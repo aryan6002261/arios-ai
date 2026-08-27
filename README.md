@@ -19,7 +19,7 @@ ARIOS is an autonomous AI taskmaster built to understand user requests, execute 
 
 ## 🖥️ Preview
 
-![ARIOS Preview](https://files.catbox.moe/w5adwr.png)
+![ARIOS Preview](https://files.catbox.moe/dptd72.png)
 
 ---
 
@@ -102,8 +102,8 @@ ARIOS is publicly deployed and accessible through the web.
                  │       FastAPI       │
                  │      Backend        │
                  │       Render        │
-                 └──────┬───────┬──────┘
-                        │       │
+                 └──────┬────────┬─────┘
+                        │        │
                  Task System     │
                         │        │
                         ▼        ▼
