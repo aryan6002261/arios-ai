@@ -112,19 +112,24 @@ def update_task(task_id: str, updates: dict):
 # HELPER: RUN ARIOS
 # ============================================================
 
-async def run_arios(user_message: str) -> str:
+async def run_arios(user_message: str, session_id: str = None) -> str:
 
-    session = await session_service.create_session(
-        app_name="arios_agent",
-        user_id="user",
-    )
+    if session_id:
+        session = await session_service.get_session(
+            app_name="arios_agent",
+            user_id="user",
+            session_id=session_id,
+        )
+    else:
+        session = await session_service.create_session(
+            app_name="arios_agent",
+            user_id="user",
+        )
 
     content = types.Content(
         role="user",
         parts=[
-            types.Part(
-                text=user_message,
-            )
+            types.Part(text=user_message)
         ],
     )
 
@@ -135,11 +140,8 @@ async def run_arios(user_message: str) -> str:
         session_id=session.id,
         new_message=content,
     ):
-
         if event.is_final_response():
-
             if event.content and event.content.parts:
-
                 final_response = event.content.parts[0].text
 
     return final_response
@@ -152,6 +154,7 @@ async def run_arios(user_message: str) -> str:
 async def execute_task(
     task_id: str,
     user_message: str,
+    session_id: str = None,
 ):
 
     try:
@@ -186,7 +189,7 @@ async def execute_task(
         # Run ARIOS
         # ------------------------------
 
-        result = await run_arios(user_message)
+        result = await run_arios(user_message, session_id)
 
         # ------------------------------
         # Completed
@@ -276,6 +279,8 @@ async def create_task(message: dict):
         "",
     ).strip()
 
+    session_id = message.get("session_id")
+
     if not user_message:
 
         return {
@@ -322,6 +327,7 @@ async def create_task(message: dict):
         execute_task(
             task_id,
             user_message,
+            session_id,
         )
     )
 

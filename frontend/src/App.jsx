@@ -13,6 +13,7 @@ const STATUS_STEPS = [
 ];
 
 function App() {
+  const [sessionId] = useState(() => crypto.randomUUID());
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -236,6 +237,7 @@ function App() {
         },
         body: JSON.stringify({
           message: text,
+          session_id: sessionId,
         }),
       });
 
