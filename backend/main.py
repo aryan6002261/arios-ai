@@ -114,16 +114,21 @@ def update_task(task_id: str, updates: dict):
 
 async def run_arios(user_message: str, session_id: str = None) -> str:
 
+    session = None
+
     if session_id:
         session = await session_service.get_session(
             app_name="arios_agent",
             user_id="user",
             session_id=session_id,
         )
-    else:
+
+    # Create a new session if the requested one doesn't exist
+    if session is None:
         session = await session_service.create_session(
             app_name="arios_agent",
             user_id="user",
+            session_id=session_id,
         )
 
     content = types.Content(
