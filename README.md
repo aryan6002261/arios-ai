@@ -24,7 +24,7 @@ ARIOS is an autonomous AI taskmaster built to understand user requests, execute 
 
 ## 🖥️ Preview
 
-![ARIOS Preview](https://files.catbox.moe/dptd72.png)
+![ARIOS Preview](https://files.catbox.moe/9yzxon.png)
 
 ---
 
