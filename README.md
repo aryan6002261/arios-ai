@@ -39,26 +39,17 @@ ARIOS is publicly deployed and accessible through the web.
 ## ✨ Features
 
 - 💬 Conversational AI chatbot
-- 🧠 Powered by Google's Gemini
-- 🧮 Mathematical calculation tool
-- 💻 Coding and problem-solving assistance
-- 📚 Concept explanations
 - ⚡ Fast React-based interface
 - 🔌 REST API powered by FastAPI
 - ☁️ Cloud-deployed backend
 - 🌐 Public web application
-- 🔄 Automatic deployment through GitHub
 - 🤖 Autonomous task execution
-- ⚡ Asynchronous background task processing
 - 📊 Real-time task status and progress tracking
-- 🧠 Google Gemini-powered reasoning
 - 🔗 Google ADK agent architecture
 - 💾 Firestore integration
-- 💬 Persistent local chat history
 - 📝 Markdown + GitHub Flavored Markdown rendering
 - 📱 Responsive web interface
 - ⚙️ Task and system status handling
-- 🔌 REST API architecture
 - 🛡️ Graceful AI/API error handling
 
 ---
