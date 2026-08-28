@@ -12,7 +12,7 @@ def calculate(expression: str) -> str:
 
 planner_agent = Agent(
     name="task_planner",
-    model="gemini-3.5-flash",
+    model="gemini-3.5-flash-lite",
     description="Breaks complex user goals into clear, actionable subtasks.",
     instruction="""
 You are the ARIOS Task Planner.
@@ -35,7 +35,7 @@ Your job is to create the plan for the other ARIOS agents.
 
 research_agent = Agent(
     name="research_agent",
-    model="gemini-3.5-flash",
+    model="gemini-3.5-flash-lite",
     description="Analyzes information and identifies important knowledge needed for a task.",
     instruction="""
 You are the ARIOS Research Agent.
@@ -60,7 +60,7 @@ final result.
 
 analysis_agent = Agent(
     name="analysis_agent",
-    model="gemini-3.5-flash",
+    model="gemini-3.5-flash-lite",
     description="Analyzes the task and develops practical solutions.",
     instruction="""
 You are the ARIOS Analysis Agent.
@@ -82,7 +82,7 @@ the user's request.
 
 execution_agent = Agent(
     name="execution_agent",
-    model="gemini-3.5-flash",
+    model="gemini-3.5-flash-lite",
     description="Produces the final useful result from the work of the other agents.",
     instruction="""
 You are the ARIOS Execution Agent.
@@ -126,7 +126,7 @@ taskmaster_agent = SequentialAgent(
 
 root_agent = Agent(
     name="arios_agent",
-    model="gemini-3.5-flash",
+    model="gemini-3.5-flash-lite",
     description="ARIOS — an autonomous general-purpose AI assistant and taskmaster.",
     instruction="""
 You are ARIOS, an autonomous AI assistant.
