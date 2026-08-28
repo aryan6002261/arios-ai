@@ -32,15 +32,6 @@ app.add_middleware(
 # ============================================================
 # FIRESTORE
 # ============================================================
-# Firestore is optional.
-#
-# Cloud Shell / Google Cloud:
-#   Firestore works automatically through ADC.
-#
-# Render:
-#   If Google credentials are unavailable, ARIOS continues
-#   using in-memory task storage instead of crashing.
-# ============================================================
 
 db = None
 tasks_collection = None
@@ -79,6 +70,27 @@ runner = Runner(
 
 
 # ============================================================
+# SESSION MAPPING
+# ============================================================
+#
+# Frontend creates its own conversation/session ID.
+#
+# ADK creates its own real session ID.
+#
+# We keep a mapping between them:
+#
+# frontend session ID
+#        ↓
+# actual ADK session ID
+#
+# This prevents us from accidentally asking ADK for a
+# session that does not exist.
+# ============================================================
+
+adk_sessions = {}
+
+
+# ============================================================
 # IN-MEMORY TASK STORAGE
 # ============================================================
 
@@ -105,36 +117,79 @@ def update_task(task_id: str, updates: dict):
             )
 
         except Exception as error:
-            print(f"⚠ Firestore update failed: {error}")
+            print(
+                f"⚠ Firestore update failed: {error}"
+            )
+
+
+# ============================================================
+# HELPER: GET OR CREATE ADK SESSION
+# ============================================================
+
+async def get_or_create_session(
+    session_id: str = None,
+):
+
+    # --------------------------------------------------------
+    # If frontend provided a session ID, check our mapping.
+    # --------------------------------------------------------
+
+    if session_id:
+
+        actual_adk_session_id = adk_sessions.get(
+            session_id
+        )
+
+        if actual_adk_session_id:
+
+            session = await session_service.get_session(
+                app_name="arios_agent",
+                user_id="user",
+                session_id=actual_adk_session_id,
+            )
+
+            if session is not None:
+                return session
+
+    # --------------------------------------------------------
+    # No existing session found.
+    # Create a brand-new ADK session.
+    # --------------------------------------------------------
+
+    session = await session_service.create_session(
+        app_name="arios_agent",
+        user_id="user",
+    )
+
+    # --------------------------------------------------------
+    # Remember the REAL ADK session ID.
+    # --------------------------------------------------------
+
+    if session_id:
+        adk_sessions[session_id] = session.id
+
+    return session
 
 
 # ============================================================
 # HELPER: RUN ARIOS
 # ============================================================
 
-async def run_arios(user_message: str, session_id: str = None) -> str:
+async def run_arios(
+    user_message: str,
+    session_id: str = None,
+) -> str:
 
-    session = None
-
-    if session_id:
-        session = await session_service.get_session(
-            app_name="arios_agent",
-            user_id="user",
-            session_id=session_id,
-        )
-
-    # Create a new session if the requested one doesn't exist
-    if session is None:
-        session = await session_service.create_session(
-            app_name="arios_agent",
-            user_id="user",
-            session_id=session_id,
-        )
+    session = await get_or_create_session(
+        session_id
+    )
 
     content = types.Content(
         role="user",
         parts=[
-            types.Part(text=user_message)
+            types.Part(
+                text=user_message,
+            )
         ],
     )
 
@@ -145,8 +200,11 @@ async def run_arios(user_message: str, session_id: str = None) -> str:
         session_id=session.id,
         new_message=content,
     ):
+
         if event.is_final_response():
+
             if event.content and event.content.parts:
+
                 final_response = event.content.parts[0].text
 
     return final_response
@@ -194,7 +252,10 @@ async def execute_task(
         # Run ARIOS
         # ------------------------------
 
-        result = await run_arios(user_message, session_id)
+        result = await run_arios(
+            user_message,
+            session_id,
+        )
 
         # ------------------------------
         # Completed
@@ -214,7 +275,9 @@ async def execute_task(
 
     except Exception as error:
 
-        print(f"❌ Task {task_id} failed: {error}")
+        print(
+            f"❌ Task {task_id} failed: {error}"
+        )
 
         update_task(
             task_id,
@@ -257,6 +320,10 @@ async def chat(message: dict):
         "",
     ).strip()
 
+    session_id = message.get(
+        "session_id"
+    )
+
     if not user_message:
 
         return {
@@ -265,6 +332,7 @@ async def chat(message: dict):
 
     final_response = await run_arios(
         user_message,
+        session_id,
     )
 
     return {
@@ -284,7 +352,9 @@ async def create_task(message: dict):
         "",
     ).strip()
 
-    session_id = message.get("session_id")
+    session_id = message.get(
+        "session_id"
+    )
 
     if not user_message:
 
@@ -309,11 +379,20 @@ async def create_task(message: dict):
         "completed_at": None,
     }
 
+    # --------------------------------------------------------
     # Always store locally
+    # --------------------------------------------------------
+
     tasks[task_id] = task
 
+    # --------------------------------------------------------
     # Store in Firestore when available
-    if FIRESTORE_ENABLED and tasks_collection is not None:
+    # --------------------------------------------------------
+
+    if (
+        FIRESTORE_ENABLED
+        and tasks_collection is not None
+    ):
 
         try:
 
@@ -327,7 +406,10 @@ async def create_task(message: dict):
                 f"⚠ Firestore task creation failed: {error}"
             )
 
+    # --------------------------------------------------------
     # Start autonomous task
+    # --------------------------------------------------------
+
     asyncio.create_task(
         execute_task(
             task_id,
@@ -353,20 +435,23 @@ async def create_task(message: dict):
 @app.get("/tasks/{task_id}")
 async def get_task(task_id: str):
 
-    # ------------------------------
+    # --------------------------------------------------------
     # Local memory first
-    # ------------------------------
+    # --------------------------------------------------------
 
     task = tasks.get(task_id)
 
     if task:
         return task
 
-    # ------------------------------
+    # --------------------------------------------------------
     # Firestore fallback
-    # ------------------------------
+    # --------------------------------------------------------
 
-    if FIRESTORE_ENABLED and tasks_collection is not None:
+    if (
+        FIRESTORE_ENABLED
+        and tasks_collection is not None
+    ):
 
         try:
 
@@ -377,6 +462,7 @@ async def get_task(task_id: str):
             )
 
             if document.exists:
+
                 return document.to_dict()
 
         except Exception as error:
@@ -385,9 +471,9 @@ async def get_task(task_id: str):
                 f"⚠ Firestore read failed: {error}"
             )
 
-    # ------------------------------
+    # --------------------------------------------------------
     # Not found
-    # ------------------------------
+    # --------------------------------------------------------
 
     return {
         "error": "Task not found.",
