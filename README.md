@@ -15,7 +15,6 @@ ARIOS is an autonomous AI taskmaster built to understand user requests, execute 
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
 ![Firestore](https://img.shields.io/badge/Firestore-FFCA28?style=for-the-badge&logo=firebase&logoColor=black)
 ![Vercel](https://img.shields.io/badge/Vercel-000000?style=for-the-badge&logo=vercel)
-![Render](https://img.shields.io/badge/Render-46E3B7?style=for-the-badge&logo=render&logoColor=black)
 ![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
 
 </p>
@@ -81,38 +80,48 @@ ARIOS is publicly deployed and accessible through the web.
 
 ## 🏗️ Architecture
 
+ARIOS follows a modular cloud-based architecture designed to separate the user interface, backend task processing, AI workflow, and persistent storage.
+
 ```text
-                         🌎 USER
-                            │
-                            ▼
-                 ┌─────────────────────┐
-                 │    React + Vite     │
-                 │      Frontend       │
-                 │       Vercel        │
-                 └──────────┬──────────┘
-                            │
-                       HTTPS / REST
-                            │
-                            ▼
-                 ┌─────────────────────┐
-                 │       FastAPI       │
-                 │      Backend        │
-                 │       Render        │
-                 └──────┬────────┬─────┘
-                        │        │
-                 Task System     │
-                        │        │
-                        ▼        ▼
-              ┌────────────┐  ┌──────────────┐
-              │ Google ADK │  │  Firestore   │
-              │ ARIOS Agent│  │   Database   │
-              └──────┬─────┘  └──────────────┘
-                     │
-                     ▼
-              ┌────────────┐
-              │   Gemini   │
-              │     AI     │
-              └────────────┘
+                         ┌──────────────────────┐
+                         │    User / Browser    │
+                         └──────────┬───────────┘
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │    React Frontend    │
+                         │       Vercel         │
+                         └──────────┬───────────┘
+                                    │
+                              HTTP / REST API
+                                    │
+                                    ▼
+                    ┌──────────────────────────────┐
+                    │       FastAPI Backend        │
+                    │        Google Cloud Run      │
+                    │                              │
+                    │  • Task creation             │
+                    │  • Task status tracking      │
+                    │  • Background execution      │
+                    │  • API communication         │
+                    └──────────────┬───────────────┘
+                                   │
+                                   ▼
+                    ┌──────────────────────────────┐
+                    │       Google ADK + Gemini    │
+                    │                              │
+                    │     ARIOS AI Taskmaster      │
+                    └──────────────┬───────────────┘
+                                   │
+                                   ▼
+                    ┌──────────────────────────────┐
+                    │       Cloud Firestore        │
+                    │                              │
+                    │  • Task data                 │
+                    │  • Status & progress         │
+                    │  • Results                   │
+                    │  • Timestamps                │
+                    └──────────────────────────────┘
 ```
 
 ---
@@ -183,7 +192,7 @@ GET /tasks/{task_id}
 The frontend is deployed using Vercel.
 
 ### Backend
-The FastAPI backend is deployed using Render.
+The FastAPI backend is deployed using Cloud Firestore.
 
 ### Source Control
 The project is maintained using GitHub.
@@ -195,7 +204,7 @@ GitHub
    │
    ├── Frontend → Vercel
    │
-   └── Backend → Render
+   └── Backend → Firestore
 ```
 
 ---
